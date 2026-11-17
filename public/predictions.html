@@ -1,0 +1,1408 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dual Trade Predictions Matrix | Institutional Binance Quant Engine</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Tailwind Config -->
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              dark: '#080c14',
+              card: '#0f172a',
+              panel: '#131e36',
+              border: '#1e293b',
+              accent: '#3b82f6',
+              long: '#10b981',
+              short: '#f43f5e',
+              gold: '#f59e0b',
+              purple: '#8b5cf6',
+            }
+          },
+          fontFamily: {
+            mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Custom scrollbar for institutional density */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #080c14; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+
+    * { box-sizing: border-box; }
+
+    @keyframes subtlePulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
+    }
+    .pulse-live { animation: subtlePulse 2s infinite ease-in-out; }
+  </style>
+</head>
+<body class="bg-brand-dark text-slate-200 font-sans min-h-screen flex flex-col selection:bg-blue-600 selection:text-white">
+
+  <!-- ========================================================================= -->
+  <!-- 1. TOP HEADER BAR -->
+  <!-- ========================================================================= -->
+  <header class="min-h-14 border-b border-brand-border bg-brand-card/95 backdrop-blur px-3 sm:px-4 py-2 flex flex-wrap lg:flex-nowrap items-center justify-between gap-2.5 sticky top-0 z-50">
+    <div class="flex items-center gap-3 shrink-0">
+      <div class="flex items-center gap-2">
+        <span class="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-md shadow-blue-500/50"></span>
+        <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-1.5">
+          <span>QUANTUM<span class="text-blue-500">EDGE</span></span>
+          <span class="text-[10px] font-mono font-normal bg-purple-500/10 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded">DUAL PREDICTIONS MATRIX</span>
+        </h1>
+      </div>
+
+      <!-- Live WS status indicator -->
+      <div class="flex items-center gap-1.5 text-[11px] font-mono text-slate-400 bg-brand-dark/70 border border-brand-border px-2 py-0.5 rounded">
+        <span id="wsStatusDot" class="w-2 h-2 rounded-full bg-emerald-500 pulse-live"></span>
+        <span id="wsStatusText">LIVE (1s)</span>
+      </div>
+    </div>
+
+    <!-- Center/Right Telemetry Pills -->
+    <div class="flex flex-wrap items-center gap-2 text-xs font-mono">
+      <!-- 100% Read-Only Safety Badge -->
+      <div class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+        <span>🔒 100% READ-ONLY</span>
+      </div>
+
+      <!-- BTC Macro Pill -->
+      <div id="btcMacroPill" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-emerald-950/60 border border-emerald-500/30 text-emerald-400 text-[11px]">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+        <span class="font-bold">BTC: <span id="headerBtcPrice">$--</span></span>
+        <span id="headerBtcChange" class="font-bold">(--%)</span>
+        <span id="headerMacroState" class="hidden sm:inline px-1 bg-emerald-500/20 text-emerald-300 rounded text-[9px] uppercase font-bold">STABLE</span>
+      </div>
+
+      <!-- Live Account Asset Equity Pill -->
+      <div class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-900 border border-brand-border text-[11px]">
+        <span class="text-slate-400">ASSET:</span>
+        <span id="headerEquity" class="text-white font-bold">-- USDT</span>
+      </div>
+
+      <!-- Funding Countdown -->
+      <div class="flex items-center gap-1 px-2.5 py-1 rounded bg-brand-dark/80 border border-brand-border text-[11px] text-amber-300">
+        <span class="text-slate-400">FUNDING:</span>
+        <strong id="fundingCountdown" class="text-white">--:--:--</strong>
+      </div>
+    </div>
+  </header>
+
+  <!-- ========================================================================= -->
+  <!-- 2. MAIN 2-COLUMN LAYOUT: SQUEEZE RADAR (LEFT) + DUAL PREDICTIONS (RIGHT) -->
+  <!-- ========================================================================= -->
+  <main class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-0 overflow-y-auto lg:overflow-hidden min-h-0">
+
+    <!-- ======================================================================= -->
+    <!-- LEFT PANEL: TOP SQUEEZE RADAR & SEARCH (Col 12 -> 3) -->
+    <!-- ======================================================================= -->
+    <aside class="col-span-12 lg:col-span-3 border-b lg:border-b-0 lg:border-r border-brand-border bg-brand-card/50 flex flex-col h-auto lg:h-full overflow-hidden min-w-0">
+      
+      <!-- Search & Autocomplete Header -->
+      <div class="p-2.5 border-b border-brand-border bg-brand-card relative overflow-visible z-30">
+        <div class="relative">
+          <input
+            id="symbolSearchInput"
+            type="text"
+            placeholder="Search coin (e.g. SOL, BTC, PEPE)..."
+            class="w-full bg-brand-dark border border-brand-border rounded px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 font-mono uppercase"
+            autocomplete="off"
+          />
+          <svg class="w-3.5 h-3.5 text-slate-400 absolute right-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+          </svg>
+        </div>
+
+        <!-- Autocomplete Dropdown List -->
+        <div id="autocompleteList" class="hidden absolute left-2.5 right-2.5 top-11 bg-brand-panel border border-brand-border rounded-md shadow-2xl z-50 max-h-56 overflow-y-auto"></div>
+      </div>
+
+      <!-- Scanner Header Controls -->
+      <div class="px-2.5 py-1.5 bg-slate-900/60 border-b border-brand-border flex items-center justify-between text-xs">
+        <span class="font-bold text-slate-300 flex items-center gap-1.5 text-[11px]">
+          <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+          TOP SQUEEZE RADAR
+        </span>
+        <div class="flex items-center gap-1.5">
+          <button id="toggleAplusBtn" onclick="toggleAplusFilter()" class="px-2 py-0.5 rounded text-[10px] font-mono border border-slate-700 bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer">
+            🎯 A+ Only: OFF
+          </button>
+          <button id="refreshScannerBtn" onclick="fetchCandidates()" class="text-slate-400 hover:text-white transition flex items-center gap-1 font-mono text-[10px] cursor-pointer">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            Scan (30s)
+          </button>
+        </div>
+      </div>
+
+      <!-- Candidate Cards Container -->
+      <div id="candidateList" class="flex-1 overflow-y-auto p-2 space-y-1.5 min-h-[160px] lg:min-h-0">
+        <div class="p-4 text-center text-xs text-slate-500 font-mono">Initializing Microstructure Radar...</div>
+      </div>
+
+      <!-- Radar Legend -->
+      <div class="p-2 border-t border-brand-border bg-slate-900/40 text-[10px] text-slate-400 font-mono flex items-center justify-between shrink-0">
+        <span>Squeeze Score: 0 - 100</span>
+        <span class="text-purple-400 font-semibold">&gt;75 Prime Fuel</span>
+      </div>
+    </aside>
+
+    <!-- ======================================================================= -->
+    <!-- RIGHT MAIN PANEL: DUAL PREDICTION VIEWS (Col 12 -> 9) -->
+    <!-- ======================================================================= -->
+    <section class="col-span-12 lg:col-span-9 bg-brand-dark flex flex-col h-auto lg:h-full overflow-y-auto min-w-0">
+
+      <!-- Active Symbol Telemetry & Confluence Mode Strip -->
+      <div class="p-3 border-b border-brand-border bg-brand-card/70 flex flex-wrap items-center justify-between gap-3 shrink-0">
+        <div class="flex items-center gap-2 flex-wrap min-w-0">
+          <span id="inspectSymbol" class="text-lg sm:text-xl font-bold text-white font-mono">SELECT A COIN</span>
+          <span id="inspectPrice" class="text-base sm:text-lg font-bold text-slate-300 font-mono">$--</span>
+          <span id="inspect15mChange" class="text-xs font-mono font-semibold text-slate-400">--</span>
+          <span id="inspectRegimeBadge" class="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-slate-900 text-slate-400 border border-slate-700 truncate max-w-[200px]">AWAITING COIN</span>
+          <span id="inspectSqueezePill" class="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-slate-900 text-slate-400 border border-slate-700">SQUEEZE: --</span>
+        </div>
+
+        <div class="flex items-center gap-2.5 flex-wrap">
+          <!-- Strategy Confluence Mode Selector -->
+          <div class="flex items-center gap-1.5 bg-slate-900 p-1 rounded-md border border-slate-700/80 text-xs font-mono">
+            <span class="text-[10px] text-slate-400 font-bold hidden sm:inline">MODE:</span>
+            <select id="correlationModeSelect" onchange="changeCorrelationMode(this.value)" class="bg-slate-950 text-cyan-300 border border-slate-700 rounded px-2 py-1 text-xs font-mono font-bold focus:outline-none focus:border-cyan-400 cursor-pointer">
+              <option value="STANDALONE_ALPHA" selected>⚡ Standalone Alpha (Pure Order Flow)</option>
+              <option value="BTC_COUPLED">🔗 BTC-Coupled Mode (Macro Filter)</option>
+            </select>
+          </div>
+
+          <!-- Main Dual Prediction Action Button -->
+          <button id="btnRunPredictions" onclick="triggerDualPredictions()" class="px-3.5 py-1.5 rounded-lg font-mono font-bold text-xs bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white shadow-lg shadow-indigo-500/30 flex items-center gap-1.5 transition active:scale-95 cursor-pointer whitespace-nowrap">
+            <span id="btnPredictIcon" class="text-sm">⚡</span>
+            <span id="btnPredictText">Run Dual Predictions for <strong id="btnPredictSymbol">--</strong></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Main Prediction Content Area: 2 Distinct Side-by-Side Views -->
+      <div class="p-3 sm:p-4 space-y-4 flex-1">
+        
+        <!-- Header notice pill -->
+        <div class="flex items-center justify-between text-xs font-mono text-slate-400 bg-brand-panel/40 border border-brand-border/60 px-3 py-1.5 rounded-lg">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+            <span class="text-slate-300 font-semibold">DUAL-HORIZON ASYMMETRIC PREDICTION MATRIX</span>
+            <span class="text-slate-500 text-[11px] hidden sm:inline">&mdash; Evaluates simultaneous Long and Short structural traps with dynamic risk sizing</span>
+          </div>
+          <span class="text-[10px] text-cyan-400 font-bold">100% NON-EMOTIONAL TRAPS</span>
+        </div>
+
+        <!-- ===================================================================== -->
+        <!-- TWO DISTINCT SIDE-BY-SIDE UI VIEWS (LONG VS SHORT) -->
+        <!-- ===================================================================== -->
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+
+          <!-- =================================================================== -->
+          <!-- 🟢 1. STRICTLY LONG SIGNAL PREDICTION VIEW -->
+          <!-- =================================================================== -->
+          <div class="bg-brand-panel/90 border-2 border-emerald-500/40 hover:border-emerald-500/70 rounded-xl p-3.5 space-y-3 shadow-xl shadow-emerald-950/20 transition flex flex-col">
+            
+            <!-- Long Header Strip -->
+            <div class="flex items-center justify-between border-b border-emerald-500/30 pb-2 flex-wrap gap-1.5">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="px-2.5 py-1 rounded text-xs font-bold font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 shadow-sm shadow-emerald-500/20 flex items-center gap-1">
+                  <span>🟢</span>
+                  <span>LONG SIGNAL</span>
+                </span>
+                <span id="longSymbolText" class="font-bold text-white font-mono text-base">--</span>
+                <span id="longRegimeBadge" class="text-[10px] font-mono text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-700 truncate max-w-[150px]">AWAITING COIN</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <span id="longWinProb" class="text-[11px] font-mono font-bold text-emerald-300 bg-emerald-950/90 px-2 py-0.5 rounded border border-emerald-500/50">--% WIN PROB</span>
+                <span id="longRrBadge" class="text-[11px] font-mono text-emerald-300 font-bold bg-emerald-950/70 px-2 py-0.5 rounded border border-emerald-500/40">RR --</span>
+              </div>
+            </div>
+
+            <!-- Mode Badge & Hold Window -->
+            <div class="flex items-center justify-between text-[11px] font-mono flex-wrap gap-1">
+              <span id="longModeBadge" class="px-2 py-0.5 rounded font-bold bg-slate-900 text-slate-400 border border-slate-700">
+                ⚡ MODE: STANDALONE ALPHA
+              </span>
+              <span id="longHoldWindow" class="text-slate-400">MAX HOLD: --</span>
+            </div>
+
+            <!-- AI Long Conviction Meter -->
+            <div class="space-y-1 bg-slate-900/60 p-2 rounded-lg border border-emerald-500/20">
+              <div class="flex items-center justify-between text-[11px] font-mono">
+                <span class="text-slate-400 flex items-center gap-1">
+                  <span>AI LONG CONVICTION SCORE:</span>
+                </span>
+                <span id="longConfidenceVal" class="text-emerald-400 font-bold font-mono">--%</span>
+              </div>
+              <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden border border-emerald-500/30">
+                <div id="longConfidenceBar" class="bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 h-full transition-all duration-500" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Long Price Grid -->
+            <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+              <div class="bg-brand-dark p-2 rounded-lg border border-brand-border/60 min-w-0">
+                <div class="text-[10px] text-slate-400">LIVE MARK PRICE</div>
+                <div id="longLiveMark" class="text-white font-bold text-sm truncate">$--</div>
+              </div>
+              <div class="bg-brand-dark p-2 rounded-lg border border-blue-500/30 min-w-0">
+                <div class="text-[10px] text-blue-400">SWING LONG ENTRY</div>
+                <div id="longEntryPrice" class="text-blue-300 font-bold text-sm truncate">$--</div>
+              </div>
+              <div class="bg-brand-dark p-2 rounded-lg border border-emerald-500/30 min-w-0">
+                <div class="text-[10px] text-emerald-400 flex justify-between">
+                  <span>TP1 (50% LOCK)</span>
+                  <span id="longTp1Dist" class="text-[10px] font-bold text-emerald-400">+0.00%</span>
+                </div>
+                <div id="longTp1" class="text-emerald-400 font-bold text-sm truncate">$--</div>
+              </div>
+              <div class="bg-brand-dark p-2 rounded-lg border border-emerald-500/30 min-w-0">
+                <div class="text-[10px] text-emerald-400 flex justify-between">
+                  <span>TP2 (FULL RUNNER)</span>
+                  <span id="longTp2Dist" class="text-[10px] font-bold text-emerald-400">+0.00%</span>
+                </div>
+                <div id="longTp2" class="text-emerald-400 font-bold text-sm truncate">$--</div>
+              </div>
+              <div class="col-span-2 bg-brand-dark p-2 rounded-lg border border-rose-500/30 flex items-center justify-between min-w-0">
+                <div>
+                  <div class="text-[10px] text-rose-400">STRUCTURAL STOP LOSS</div>
+                  <div id="longStopLoss" class="text-rose-400 font-bold text-sm">$--</div>
+                </div>
+                <div class="text-right">
+                  <div class="text-[10px] text-slate-400">STOP DISTANCE</div>
+                  <div id="longStopDist" class="text-rose-400 font-bold text-xs">-0.00%</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Long Multi-Timeframe (MTF) Confluence Strip -->
+            <div class="grid grid-cols-2 gap-2 text-[10px] font-mono">
+              <div class="bg-brand-dark p-2 rounded-lg border border-brand-border/60 min-w-0 space-y-1">
+                <div class="text-slate-400 flex justify-between">
+                  <span>1H HTF TREND:</span>
+                  <span id="longHtfTrend" class="font-bold text-slate-400">--</span>
+                </div>
+                <div class="text-slate-400 flex justify-between">
+                  <span>5m MICRO-CVD:</span>
+                  <span id="longMicroCvd" class="font-bold text-slate-400">--</span>
+                </div>
+              </div>
+              <div class="bg-brand-dark p-2 rounded-lg border border-brand-border/60 min-w-0 space-y-1">
+                <div class="text-slate-400 flex justify-between">
+                  <span>ABSORPTION:</span>
+                  <span id="longAbsorption" class="font-bold text-slate-400 truncate">--</span>
+                </div>
+                <div class="text-slate-400 flex justify-between">
+                  <span>50x SHORT LIQ MAGNET:</span>
+                  <span id="longLiqPool" class="font-bold text-amber-300 truncate">$--</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Long Wall Note Banner -->
+            <div id="longWallNoteBox" class="hidden bg-indigo-950/50 border border-indigo-500/40 rounded p-1.5 text-[10px] font-mono text-indigo-300 flex items-center gap-1.5">
+              <span>🛡️</span>
+              <span id="longWallNoteText">TP1 front-running liquidity wall</span>
+            </div>
+
+            <!-- Long Risk & Sizing Advisory -->
+            <div class="bg-slate-900/90 p-2.5 rounded-lg border border-slate-700/60 space-y-1.5 text-xs font-mono">
+              <div class="flex items-center justify-between text-slate-400">
+                <span>Volatility Sizing:</span>
+                <span id="longNotional" class="text-white font-bold">$-- USDT</span>
+              </div>
+              <div class="flex items-center justify-between text-slate-400">
+                <span>Safe Leverage:</span>
+                <span id="longLeverage" class="text-amber-400 font-bold">5x (Capped)</span>
+              </div>
+              <div class="flex items-center justify-between text-slate-400">
+                <span>Margin Required:</span>
+                <span id="longMarginReq" class="text-emerald-400 font-bold">$-- USDT @ 5x</span>
+              </div>
+            </div>
+
+            <!-- Long AI Thesis & Forecast Box -->
+            <div class="bg-brand-dark p-2.5 rounded-lg border border-emerald-500/30 space-y-2 text-[11px] font-mono flex-1">
+              <div class="text-emerald-400 font-bold text-xs flex items-center gap-1">
+                <span>🤖 AI LONG STRUCTURAL THESIS</span>
+              </div>
+              <p id="longForecastText" class="text-slate-400 leading-relaxed text-[11px]">
+                Click any coin in the Squeeze Radar to calculate real-time structural Long setups...
+              </p>
+              <div id="longCatalystText" class="text-slate-400 text-[10px] bg-slate-900/80 p-2 rounded border border-slate-800">
+                Awaiting coin selection.
+              </div>
+              <div id="longInvalidationText" class="text-slate-400 text-[10px] bg-slate-900/80 p-2 rounded border border-slate-800">
+                Awaiting coin selection.
+              </div>
+            </div>
+
+            <!-- Long Simulation Button -->
+            <button id="btnSimulateLong" onclick="simulateLongPosition()" class="w-full py-2 px-3 rounded-lg font-mono font-bold text-xs bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-600/30 flex items-center justify-center gap-1.5 transition active:scale-[0.98] cursor-pointer">
+              <span>⚡</span>
+              <span>Simulate Paper Long Trade</span>
+            </button>
+          </div>
+
+          <!-- =================================================================== -->
+          <!-- 🔴 2. STRICTLY SHORT SIGNAL PREDICTION VIEW -->
+          <!-- =================================================================== -->
+          <div class="bg-brand-panel/90 border-2 border-rose-500/40 hover:border-rose-500/70 rounded-xl p-3.5 space-y-3 shadow-xl shadow-rose-950/20 transition flex flex-col">
+            
+            <!-- Short Header Strip -->
+            <div class="flex items-center justify-between border-b border-rose-500/30 pb-2 flex-wrap gap-1.5">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="px-2.5 py-1 rounded text-xs font-bold font-mono bg-rose-500/20 text-rose-400 border border-rose-500/50 shadow-sm shadow-rose-500/20 flex items-center gap-1">
+                  <span>🔴</span>
+                  <span>SHORT SIGNAL</span>
+                </span>
+                <span id="shortSymbolText" class="font-bold text-white font-mono text-base">--</span>
+                <span id="shortRegimeBadge" class="text-[10px] font-mono text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-700 truncate max-w-[150px]">AWAITING COIN</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <span id="shortWinProb" class="text-[11px] font-mono font-bold text-rose-300 bg-rose-950/90 px-2 py-0.5 rounded border border-rose-500/50">--% WIN PROB</span>
+                <span id="shortRrBadge" class="text-[11px] font-mono text-rose-300 font-bold bg-rose-950/70 px-2 py-0.5 rounded border border-rose-500/40">RR --</span>
+              </div>
+            </div>
+
+            <!-- Mode Badge & Hold Window -->
+            <div class="flex items-center justify-between text-[11px] font-mono flex-wrap gap-1">
+              <span id="shortModeBadge" class="px-2 py-0.5 rounded font-bold bg-slate-900 text-slate-400 border border-slate-700">
+                ⚡ MODE: STANDALONE ALPHA
+              </span>
+              <span id="shortHoldWindow" class="text-slate-400">MAX HOLD: --</span>
+            </div>
+
+            <!-- AI Short Conviction Meter -->
+            <div class="space-y-1 bg-slate-900/60 p-2 rounded-lg border border-rose-500/20">
+              <div class="flex items-center justify-between text-[11px] font-mono">
+                <span class="text-slate-400 flex items-center gap-1">
+                  <span>AI SHORT CONVICTION SCORE:</span>
+                </span>
+                <span id="shortConfidenceVal" class="text-rose-400 font-bold font-mono">--%</span>
+              </div>
+              <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden border border-rose-500/30">
+                <div id="shortConfidenceBar" class="bg-gradient-to-r from-rose-500 via-pink-500 to-amber-500 h-full transition-all duration-500" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- Short Price Grid -->
+            <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+              <div class="bg-brand-dark p-2 rounded-lg border border-brand-border/60 min-w-0">
+                <div class="text-[10px] text-slate-400">LIVE MARK PRICE</div>
+                <div id="shortLiveMark" class="text-white font-bold text-sm truncate">$--</div>
+              </div>
+              <div class="bg-brand-dark p-2 rounded-lg border border-rose-500/30 min-w-0">
+                <div class="text-[10px] text-rose-400">SWING SHORT ENTRY</div>
+                <div id="shortEntryPrice" class="text-rose-300 font-bold text-sm truncate">$--</div>
+              </div>
+              <div class="bg-brand-dark p-2 rounded-lg border border-rose-500/30 min-w-0">
+                <div class="text-[10px] text-rose-400 flex justify-between">
+                  <span>TP1 (50% LOCK)</span>
+                  <span id="shortTp1Dist" class="text-[10px] font-bold text-rose-400">-0.00%</span>
+                </div>
+                <div id="shortTp1" class="text-rose-400 font-bold text-sm truncate">$--</div>
+              </div>
+              <div class="bg-brand-dark p-2 rounded-lg border border-rose-500/30 min-w-0">
+                <div class="text-[10px] text-rose-400 flex justify-between">
+                  <span>TP2 (FULL RUNNER)</span>
+                  <span id="shortTp2Dist" class="text-[10px] font-bold text-rose-400">-0.00%</span>
+                </div>
+                <div id="shortTp2" class="text-rose-400 font-bold text-sm truncate">$--</div>
+              </div>
+              <div class="col-span-2 bg-brand-dark p-2 rounded-lg border border-rose-500/30 flex items-center justify-between min-w-0">
+                <div>
+                  <div class="text-[10px] text-rose-400">STRUCTURAL STOP LOSS</div>
+                  <div id="shortStopLoss" class="text-rose-400 font-bold text-sm">$--</div>
+                </div>
+                <div class="text-right">
+                  <div class="text-[10px] text-slate-400">STOP DISTANCE</div>
+                  <div id="shortStopDist" class="text-rose-400 font-bold text-xs">+0.00%</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Short Multi-Timeframe (MTF) Confluence Strip -->
+            <div class="grid grid-cols-2 gap-2 text-[10px] font-mono">
+              <div class="bg-brand-dark p-2 rounded-lg border border-brand-border/60 min-w-0 space-y-1">
+                <div class="text-slate-400 flex justify-between">
+                  <span>1H HTF TREND:</span>
+                  <span id="shortHtfTrend" class="font-bold text-slate-400">--</span>
+                </div>
+                <div class="text-slate-400 flex justify-between">
+                  <span>5m MICRO-CVD:</span>
+                  <span id="shortMicroCvd" class="font-bold text-slate-400">--</span>
+                </div>
+              </div>
+              <div class="bg-brand-dark p-2 rounded-lg border border-brand-border/60 min-w-0 space-y-1">
+                <div class="text-slate-400 flex justify-between">
+                  <span>ABSORPTION:</span>
+                  <span id="shortAbsorption" class="font-bold text-slate-400 truncate">--</span>
+                </div>
+                <div class="text-slate-400 flex justify-between">
+                  <span>50x LONG LIQ MAGNET:</span>
+                  <span id="shortLiqPool" class="font-bold text-amber-300 truncate">$--</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Short Wall Note Banner -->
+            <div id="shortWallNoteBox" class="hidden bg-indigo-950/50 border border-indigo-500/40 rounded p-1.5 text-[10px] font-mono text-indigo-300 flex items-center gap-1.5">
+              <span>🛡️</span>
+              <span id="shortWallNoteText">TP1 front-running liquidity wall</span>
+            </div>
+
+            <!-- Short Risk & Sizing Advisory -->
+            <div class="bg-slate-900/90 p-2.5 rounded-lg border border-slate-700/60 space-y-1.5 text-xs font-mono">
+              <div class="flex items-center justify-between text-slate-400">
+                <span>Volatility Sizing:</span>
+                <span id="shortNotional" class="text-white font-bold">$-- USDT</span>
+              </div>
+              <div class="flex items-center justify-between text-slate-400">
+                <span>Safe Leverage:</span>
+                <span id="shortLeverage" class="text-amber-400 font-bold">5x (Capped)</span>
+              </div>
+              <div class="flex items-center justify-between text-slate-400">
+                <span>Margin Required:</span>
+                <span id="shortMarginReq" class="text-rose-400 font-bold">$-- USDT @ 5x</span>
+              </div>
+            </div>
+
+            <!-- Short AI Thesis & Forecast Box -->
+            <div class="bg-brand-dark p-2.5 rounded-lg border border-rose-500/30 space-y-2 text-[11px] font-mono flex-1">
+              <div class="text-rose-400 font-bold text-xs flex items-center gap-1">
+                <span>🤖 AI SHORT STRUCTURAL THESIS</span>
+              </div>
+              <p id="shortForecastText" class="text-slate-400 leading-relaxed text-[11px]">
+                Click any coin in the Squeeze Radar to calculate real-time structural Short setups...
+              </p>
+              <div id="shortCatalystText" class="text-slate-400 text-[10px] bg-slate-900/80 p-2 rounded border border-slate-800">
+                Awaiting coin selection.
+              </div>
+              <div id="shortInvalidationText" class="text-slate-400 text-[10px] bg-slate-900/80 p-2 rounded border border-slate-800">
+                Awaiting coin selection.
+              </div>
+            </div>
+
+            <!-- Short Simulation Button -->
+            <button id="btnSimulateShort" onclick="simulateShortPosition()" class="w-full py-2 px-3 rounded-lg font-mono font-bold text-xs bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-600/30 flex items-center justify-center gap-1.5 transition active:scale-[0.98] cursor-pointer">
+              <span>⚡</span>
+              <span>Simulate Paper Short Trade</span>
+            </button>
+          </div>
+
+        </div>
+
+        <!-- ===================================================================== -->
+        <!-- LIVE PAPER TRADE SIMULATION TABLE -->
+        <!-- ===================================================================== -->
+        <div class="bg-brand-panel border border-brand-border rounded-xl p-3 sm:p-4 space-y-2.5">
+          <div class="flex items-center justify-between flex-wrap gap-2 border-b border-brand-border/60 pb-2">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span class="font-bold text-white text-xs font-mono">SIMULATED PAPER TRADING POSITIONS (100% READ-ONLY)</span>
+            </div>
+            <button onclick="fetchTrades()" class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer">
+              🔄 Refresh Positions
+            </button>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs font-mono">
+              <thead>
+                <tr class="text-slate-400 border-b border-brand-border text-[10px]">
+                  <th class="py-1 px-2">SYMBOL</th>
+                  <th class="py-1 px-2">DIRECTION</th>
+                  <th class="py-1 px-2">ENTRY</th>
+                  <th class="py-1 px-2">CURRENT</th>
+                  <th class="py-1 px-2">STOP LOSS</th>
+                  <th class="py-1 px-2">TP1 / TP2</th>
+                  <th class="py-1 px-2">UNREALIZED PNL</th>
+                  <th class="py-1 px-2">STATUS</th>
+                  <th class="py-1 px-2 text-right">ACTION</th>
+                </tr>
+              </thead>
+              <tbody id="tradesTableBody">
+                <tr>
+                  <td colspan="9" class="py-4 text-center text-slate-500 text-xs">
+                    No active simulated trades. Select a coin and click "Simulate Paper Long/Short" above to track live.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ========================================================================= -->
+  <!-- 3. JAVASCRIPT LOGIC ENGINE -->
+  <!-- ========================================================================= -->
+  <script>
+    // Global Application State
+    const state = {
+      activeSymbol: '',
+      correlationMode: 'STANDALONE_ALPHA',
+      aplusFilterOnly: false,
+      candidates: [],
+      allSymbols: [],
+      microstructure: null,
+      longPrediction: null,
+      shortPrediction: null,
+      trades: [],
+      nextFundingTime: 0,
+      wsConnected: false
+    };
+
+    // --- HIGH-PRECISION DYNAMIC PRICE FORMATTERS ---
+    function getCryptoPriceDecimals(ref) {
+      const num = Math.abs(Number(ref));
+      if (isNaN(num) || num === 0) return 2;
+      if (num >= 1000) return 2;
+      if (num >= 100) return 2;
+      if (num >= 1) return 4;
+      const leadingZeros = Math.floor(-Math.log10(num));
+      return Math.max(4, Math.min(8, leadingZeros + 5));
+    }
+
+    function formatCryptoPrice(val, refPrice) {
+      const num = Number(val);
+      if (isNaN(num) || num === 0) return '0.00';
+      const dec = getCryptoPriceDecimals(refPrice ?? num);
+      if (num >= 1000) {
+        return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      }
+      let str = num.toFixed(dec);
+      if (dec > 2 && str.includes('.')) {
+        str = str.replace(/(\.\d{2,}?)0+$/, '$1');
+      }
+      return str;
+    }
+
+    // --- WEBSOCKET CONNECTION & WATCHDOG ---
+    let ws = null;
+    function initWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+      const wsUrl = `${protocol}${window.location.host}/ws`;
+
+      try {
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          state.wsConnected = true;
+          updateWsStatusUI(true);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            handleWsMessage(data);
+          } catch (e) {
+            console.warn('WS message parse error:', e);
+          }
+        };
+
+        ws.onclose = () => {
+          state.wsConnected = false;
+          updateWsStatusUI(false);
+          setTimeout(initWebSocket, 2000);
+        };
+
+        ws.onerror = () => {
+          state.wsConnected = false;
+          updateWsStatusUI(false);
+        };
+      } catch (err) {
+        console.warn('WS connection notice:', err);
+        setTimeout(initWebSocket, 3000);
+      }
+    }
+
+    function updateWsStatusUI(connected) {
+      const dot = document.getElementById('wsStatusDot');
+      const text = document.getElementById('wsStatusText');
+      if (dot) {
+        dot.className = connected
+          ? 'w-2 h-2 rounded-full bg-emerald-500 pulse-live'
+          : 'w-2 h-2 rounded-full bg-rose-500';
+      }
+      if (text) {
+        text.textContent = connected ? 'LIVE (1s)' : 'RECONNECTING';
+      }
+    }
+
+    function handleWsMessage(msg) {
+      if (!msg || !msg.type) return;
+
+      if (msg.type === 'INIT_SNAPSHOT') {
+        if (msg.macro) updateMacroUI(msg.macro);
+        if (msg.candidates) renderCandidates(msg.candidates);
+        if (msg.portfolio) updatePortfolioUI(msg.portfolio);
+        if (msg.fundingTimestamp) state.nextFundingTime = msg.fundingTimestamp;
+      } else if (msg.type === 'SCANNER_UPDATE') {
+        if (msg.macro) updateMacroUI(msg.macro);
+        if (msg.candidates) renderCandidates(msg.candidates);
+      } else if (msg.type === 'TICK_HEARTBEAT') {
+        if (msg.openTrades) {
+          updateActiveTradesTable(msg.openTrades);
+        }
+      } else if (msg.type === 'DUAL_PREDICTIONS_GENERATED') {
+        if (msg.symbol === state.activeSymbol) {
+          if (msg.longPrediction) renderLongCard(msg.longPrediction);
+          if (msg.shortPrediction) renderShortCard(msg.shortPrediction);
+        }
+      }
+    }
+
+    // --- TOP SQUEEZE RADAR FUNCTIONS ---
+    async function fetchCandidates() {
+      try {
+        const res = await fetch('/api/scan');
+        const data = await res.json();
+        if (data.macro) updateMacroUI(data.macro);
+        if (data.candidates && data.candidates.length > 0) {
+          state.candidates = data.candidates;
+          renderCandidates(data.candidates);
+        }
+        if (data.fundingTimestamp) {
+          state.nextFundingTime = data.fundingTimestamp;
+        }
+      } catch (e) {
+        console.warn('Candidates fetch notice:', e);
+      }
+    }
+
+    function toggleAplusFilter() {
+      state.aplusFilterOnly = !state.aplusFilterOnly;
+      const btn = document.getElementById('toggleAplusBtn');
+      if (btn) {
+        btn.textContent = state.aplusFilterOnly ? '🎯 A+ Only: ON' : '🎯 A+ Only: OFF';
+        btn.className = state.aplusFilterOnly
+          ? 'px-2 py-0.5 rounded text-[10px] font-mono border border-purple-500 bg-purple-900/80 text-purple-200 transition cursor-pointer'
+          : 'px-2 py-0.5 rounded text-[10px] font-mono border border-slate-700 bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer';
+      }
+      renderCandidates(state.candidates);
+    }
+
+    function renderCandidates(candidates) {
+      state.candidates = candidates;
+      const list = document.getElementById('candidateList');
+      if (!list) return;
+      if (!candidates || candidates.length === 0) {
+        list.innerHTML = `<div class="p-4 text-center text-xs text-slate-500 font-mono">Scanning candidate universe...</div>`;
+        return;
+      }
+
+      let displayList = candidates;
+      if (state.aplusFilterOnly) {
+        displayList = candidates.filter(c => c.isTradeableAplus || Math.abs(c.confluenceScore || 0) >= 45);
+        if (displayList.length === 0) {
+          list.innerHTML = `<div class="p-4 text-center text-xs text-slate-500 font-mono">No A+ setups currently meeting &plusmn;45 confluence criteria.</div>`;
+          return;
+        }
+      }
+
+      list.innerHTML = displayList.slice(0, 15).map(c => {
+        const isSelected = c.symbol === state.activeSymbol;
+        const score = c.squeezeVelocityScore ?? 50;
+        const scoreColor = score >= 75 ? 'text-purple-400 bg-purple-950/70 border-purple-500/40'
+                         : score >= 50 ? 'text-emerald-400 bg-emerald-950/70 border-emerald-500/40'
+                         : 'text-slate-400 bg-slate-900 border-slate-700';
+
+        const regime = c.regime || 'NEUTRAL';
+        const shortRegime = regime === 'SHORT_COVERING_EXHAUSTION' ? 'EXHAUSTION'
+                          : regime === 'PRIME_SHORT_SQUEEZE' ? 'SHORT SQUEEZE'
+                          : regime === 'PRIME_LONG_SQUEEZE' ? 'LONG SQUEEZE'
+                          : regime.replace(/_/g, ' ');
+
+        const regimeColor = regime === 'PRIME_SHORT_SQUEEZE' ? 'text-purple-300 bg-purple-950'
+                          : regime === 'SHORT_COVERING_EXHAUSTION' ? 'text-amber-300 bg-amber-950'
+                          : regime === 'PRIME_LONG_SQUEEZE' ? 'text-rose-300 bg-rose-950'
+                          : 'text-slate-300 bg-slate-800';
+
+        const price = Number(c.price) || 0;
+        const p15 = Number(c.priceChange15mPct) || 0;
+        const oi = Number(c.openInterest15mDeltaPct) || 0;
+
+        const conf = c.confluenceScore !== undefined ? c.confluenceScore : null;
+        const confText = conf !== null ? (conf >= 0 ? `+${conf}` : `${conf}`) : null;
+        const confColor = conf !== null && conf >= 45 ? 'text-emerald-400' : conf !== null && conf <= -45 ? 'text-rose-400' : 'text-slate-400';
+
+        return `
+          <div data-symbol="${c.symbol}" onclick="inspectSymbol('${c.symbol}')" class="p-2 rounded-md cursor-pointer transition border min-w-0 ${isSelected ? 'bg-brand-panel border-blue-500 shadow-md shadow-blue-500/20' : 'bg-brand-panel/30 border-brand-border/60 hover:bg-brand-panel/60 hover:border-slate-600'}">
+            <div class="flex items-center justify-between gap-1">
+              <div class="flex items-center gap-1 min-w-0 flex-wrap">
+                <span class="text-xs font-bold text-white font-mono">${c.symbol}</span>
+                ${c.isTradeableAplus ? '<span class="text-[9px] px-1 py-0.2 rounded font-mono font-bold bg-purple-900/80 text-purple-300 border border-purple-500/50">🎯 A+</span>' : ''}
+                <span class="text-[9px] px-1 py-0.2 rounded font-mono font-bold border border-slate-700 truncate max-w-[100px] ${regimeColor}" title="${regime}">${shortRegime}</span>
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                ${confText !== null ? `<span class="text-[9px] font-mono font-bold ${confColor}">[${confText}]</span>` : ''}
+                <span class="text-[11px] font-mono font-bold px-1.5 py-0.2 rounded border ${scoreColor}">${score}</span>
+              </div>
+            </div>
+
+            <div class="mt-1 flex items-center justify-between text-[10px] font-mono text-slate-400">
+              <span>$${formatCryptoPrice(price)}</span>
+              <span class="${p15 >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${p15 >= 0 ? '+' : ''}${p15.toFixed(2)}%</span>
+              <span class="${oi >= 0 ? 'text-emerald-400' : 'text-rose-400'}">&Delta;OI: ${oi.toFixed(1)}%</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // --- SYMBOL INSPECTION & DUAL PREDICTIONS ---
+    async function inspectSymbol(symbol) {
+      if (!symbol) return;
+      state.activeSymbol = symbol.toUpperCase().trim();
+
+      // Update Header Text Elements
+      const inspSym = document.getElementById('inspectSymbol');
+      if (inspSym) inspSym.textContent = state.activeSymbol;
+      const btnSym = document.getElementById('btnPredictSymbol');
+      if (btnSym) btnSym.textContent = state.activeSymbol;
+
+      // Update radar active highlight
+      document.querySelectorAll('#candidateList > div').forEach(card => {
+        if (card.getAttribute('data-symbol') === state.activeSymbol) {
+          card.classList.add('bg-brand-panel', 'border-blue-500', 'shadow-md', 'shadow-blue-500/20');
+          card.classList.remove('border-brand-border/60');
+        } else {
+          card.classList.remove('bg-brand-panel', 'border-blue-500', 'shadow-md', 'shadow-blue-500/20');
+          card.classList.add('border-brand-border/60');
+        }
+      });
+
+      // 1. Fetch Fast Microstructure
+      try {
+        const coinRes = await fetch(`/api/coin/${encodeURIComponent(state.activeSymbol)}`);
+        const coinData = await coinRes.json();
+        if (coinData && coinData.microstructure) {
+          state.microstructure = coinData.microstructure;
+          updateMicrostructureUI(coinData.microstructure);
+        }
+      } catch (err) {
+        console.warn('Fast coin load notice:', err);
+      }
+
+      // 2. Trigger Dual Predictions Calculation
+      triggerDualPredictions();
+    }
+
+    function updateMicrostructureUI(m) {
+      if (!m) return;
+      const p = Number(m.price) || 0;
+      const p15 = Number(m.priceChange15mPct) || 0;
+
+      const pEl = document.getElementById('inspectPrice');
+      if (pEl) pEl.textContent = `$${formatCryptoPrice(p, p)}`;
+
+      const p15El = document.getElementById('inspect15mChange');
+      if (p15El) {
+        p15El.textContent = `${p15 >= 0 ? '+' : ''}${p15.toFixed(2)}% (15m)`;
+        p15El.className = p15 >= 0 ? 'text-xs font-mono font-semibold text-emerald-400' : 'text-xs font-mono font-semibold text-rose-400';
+      }
+
+      const regEl = document.getElementById('inspectRegimeBadge');
+      if (regEl) {
+        regEl.textContent = m.regime || 'NEUTRAL';
+        regEl.title = m.regime || 'NEUTRAL';
+      }
+
+      const sqEl = document.getElementById('inspectSqueezePill');
+      if (sqEl) {
+        sqEl.textContent = `SQUEEZE: ${m.squeezeVelocityScore ?? 50}/100`;
+      }
+    }
+
+    async function triggerDualPredictions() {
+      const sym = state.activeSymbol;
+      if (!sym) return;
+      const btn = document.getElementById('btnRunPredictions');
+      const icon = document.getElementById('btnPredictIcon');
+      const text = document.getElementById('btnPredictText');
+
+      if (btn) btn.disabled = true;
+      if (icon) icon.className = 'animate-spin text-sm';
+      if (text) text.innerHTML = `Calculating Dual Traps for <strong>${sym}</strong>...`;
+
+      // Set skeleton / loading text
+      setLoadingState(sym);
+
+      try {
+        const mode = state.correlationMode || 'STANDALONE_ALPHA';
+        const res = await fetch(`/api/predictions/dual/${encodeURIComponent(sym)}?correlationMode=${encodeURIComponent(mode)}`);
+        const data = await res.json();
+
+        if (data.success && data.longPrediction && data.shortPrediction) {
+          state.longPrediction = data.longPrediction;
+          state.shortPrediction = data.shortPrediction;
+          renderLongCard(data.longPrediction);
+          renderShortCard(data.shortPrediction);
+        } else {
+          console.warn('Dual prediction response notice:', data);
+        }
+      } catch (err) {
+        console.error('Dual predictions fetch error:', err);
+      } finally {
+        if (btn) btn.disabled = false;
+        if (icon) icon.className = 'text-sm';
+        if (text) text.innerHTML = `Run Dual Predictions for <strong>${sym}</strong>`;
+      }
+    }
+
+    function setLoadingState(sym) {
+      const longSym = document.getElementById('longSymbolText');
+      if (longSym) longSym.textContent = sym;
+      const shortSym = document.getElementById('shortSymbolText');
+      if (shortSym) shortSym.textContent = sym;
+
+      const longForecast = document.getElementById('longForecastText');
+      if (longForecast) longForecast.innerHTML = '<span class="text-emerald-400 animate-pulse">Computing Long structural breakout and squeeze targets...</span>';
+
+      const shortForecast = document.getElementById('shortForecastText');
+      if (shortForecast) shortForecast.innerHTML = '<span class="text-rose-400 animate-pulse">Computing Short structural breakdown and void targets...</span>';
+    }
+
+    // --- RENDER 🟢 LONG SIGNAL CARD ---
+    function renderLongCard(p) {
+      if (!p) return;
+
+      const sym = document.getElementById('longSymbolText');
+      if (sym) sym.textContent = p.symbol;
+
+      const reg = document.getElementById('longRegimeBadge');
+      if (reg) reg.textContent = (p.regime || 'MOMENTUM SCALP').replace(/_/g, ' ');
+
+      const winProb = document.getElementById('longWinProb');
+      if (winProb) winProb.textContent = `${p.winProbabilityPct}% WIN PROB`;
+
+      const rr = document.getElementById('longRrBadge');
+      if (rr) rr.textContent = `RR 1:${p.riskRewardRatio}`;
+
+      const mode = document.getElementById('longModeBadge');
+      if (mode) {
+        const m = p.correlationMode || state.correlationMode;
+        mode.textContent = m === 'BTC_COUPLED' ? '🔗 MODE: BTC-COUPLED' : '⚡ MODE: STANDALONE ALPHA';
+      }
+
+      const confVal = document.getElementById('longConfidenceVal');
+      if (confVal) confVal.textContent = `${p.confidenceScore}%`;
+
+      const confBar = document.getElementById('longConfidenceBar');
+      if (confBar) confBar.style.width = `${p.confidenceScore}%`;
+
+      const liveMark = document.getElementById('longLiveMark');
+      if (liveMark) {
+        const mark = Number(p.liveMarkPrice) || 0;
+        liveMark.textContent = `$${formatCryptoPrice(mark, mark)}`;
+      }
+
+      const entry = document.getElementById('longEntryPrice');
+      if (entry) {
+        const ep = Number(p.entryPrice) || 0;
+        entry.textContent = `$${formatCryptoPrice(ep, ep)}`;
+      }
+
+      const tp1 = document.getElementById('longTp1');
+      if (tp1) {
+        const t1 = Number(p.tp1) || 0;
+        tp1.textContent = `$${formatCryptoPrice(t1, p.entryPrice)}`;
+      }
+
+      const tp1Dist = document.getElementById('longTp1Dist');
+      if (tp1Dist) tp1Dist.textContent = `+${p.tp1DistancePct}%`;
+
+      const tp2 = document.getElementById('longTp2');
+      if (tp2) {
+        const t2 = Number(p.tp2) || 0;
+        tp2.textContent = `$${formatCryptoPrice(t2, p.entryPrice)}`;
+      }
+
+      const tp2Dist = document.getElementById('longTp2Dist');
+      if (tp2Dist) tp2Dist.textContent = `+${p.tp2DistancePct}%`;
+
+      const sl = document.getElementById('longStopLoss');
+      if (sl) {
+        const slp = Number(p.stopLoss) || 0;
+        sl.textContent = `$${formatCryptoPrice(slp, p.entryPrice)}`;
+      }
+
+      const slDist = document.getElementById('longStopDist');
+      if (slDist) slDist.textContent = `-${p.stopDistancePct}%`;
+
+      const htf = document.getElementById('longHtfTrend');
+      if (htf) {
+        htf.textContent = p.htfTrend || 'BULLISH';
+        htf.className = p.htfTrend === 'BEARISH' ? 'font-bold text-rose-400' : 'font-bold text-emerald-400';
+      }
+
+      const cvd = document.getElementById('longMicroCvd');
+      if (cvd) {
+        const val = p.microCvd5m || 0;
+        const sign = val >= 0 ? '+' : '';
+        cvd.textContent = `${sign}$${(val / 1000).toFixed(1)}k`;
+        cvd.className = val >= 0 ? 'font-bold text-emerald-400' : 'font-bold text-rose-400';
+      }
+
+      const abs = document.getElementById('longAbsorption');
+      if (abs) {
+        abs.textContent = (p.priceCvdDivergence || 'NONE').replace(/_/g, ' ');
+      }
+
+      const liq = document.getElementById('longLiqPool');
+      if (liq) {
+        const magnet = p.shortLiqPool50x;
+        liq.textContent = magnet && magnet > 0 ? `$${formatCryptoPrice(magnet, p.entryPrice || magnet)}` : '$--';
+      }
+
+      const notional = document.getElementById('longNotional');
+      if (notional) notional.textContent = `$${Number(p.recommendedNotionalUsdt || 0).toLocaleString()} USDT`;
+
+      const lev = document.getElementById('longLeverage');
+      if (lev) lev.textContent = `${p.recommendedLeverage}x (Capped)`;
+
+      const margin = document.getElementById('longMarginReq');
+      if (margin) {
+        const nVal = Number(p.recommendedNotionalUsdt) || 0;
+        const lVal = Number(p.recommendedLeverage) || 1;
+        const mVal = p.marginRequiredUsdt ? p.marginRequiredUsdt.toFixed(2) : (nVal / lVal).toFixed(2);
+        margin.textContent = `$${mVal} USDT @ ${lVal}x`;
+      }
+
+      if (p.predictionSummary) {
+        const f = document.getElementById('longForecastText');
+        if (f) f.textContent = p.predictionSummary.priceActionForecast || '';
+        const c = document.getElementById('longCatalystText');
+        if (c) c.textContent = p.predictionSummary.keyCatalyst || '';
+        const i = document.getElementById('longInvalidationText');
+        if (i) i.textContent = p.predictionSummary.invalidationTrigger || '';
+      }
+    }
+
+    // --- RENDER 🔴 SHORT SIGNAL CARD ---
+    function renderShortCard(p) {
+      if (!p) return;
+
+      const sym = document.getElementById('shortSymbolText');
+      if (sym) sym.textContent = p.symbol;
+
+      const reg = document.getElementById('shortRegimeBadge');
+      if (reg) reg.textContent = (p.regime || 'MOMENTUM SCALP').replace(/_/g, ' ');
+
+      const winProb = document.getElementById('shortWinProb');
+      if (winProb) winProb.textContent = `${p.winProbabilityPct}% WIN PROB`;
+
+      const rr = document.getElementById('shortRrBadge');
+      if (rr) rr.textContent = `RR 1:${p.riskRewardRatio}`;
+
+      const mode = document.getElementById('shortModeBadge');
+      if (mode) {
+        const m = p.correlationMode || state.correlationMode;
+        mode.textContent = m === 'BTC_COUPLED' ? '🔗 MODE: BTC-COUPLED' : '⚡ MODE: STANDALONE ALPHA';
+      }
+
+      const confVal = document.getElementById('shortConfidenceVal');
+      if (confVal) confVal.textContent = `${p.confidenceScore}%`;
+
+      const confBar = document.getElementById('shortConfidenceBar');
+      if (confBar) confBar.style.width = `${p.confidenceScore}%`;
+
+      const liveMark = document.getElementById('shortLiveMark');
+      if (liveMark) {
+        const mark = Number(p.liveMarkPrice) || 0;
+        liveMark.textContent = `$${formatCryptoPrice(mark, mark)}`;
+      }
+
+      const entry = document.getElementById('shortEntryPrice');
+      if (entry) {
+        const ep = Number(p.entryPrice) || 0;
+        entry.textContent = `$${formatCryptoPrice(ep, ep)}`;
+      }
+
+      const tp1 = document.getElementById('shortTp1');
+      if (tp1) {
+        const t1 = Number(p.tp1) || 0;
+        tp1.textContent = `$${formatCryptoPrice(t1, p.entryPrice)}`;
+      }
+
+      const tp1Dist = document.getElementById('shortTp1Dist');
+      if (tp1Dist) tp1Dist.textContent = `-${p.tp1DistancePct}%`;
+
+      const tp2 = document.getElementById('shortTp2');
+      if (tp2) {
+        const t2 = Number(p.tp2) || 0;
+        tp2.textContent = `$${formatCryptoPrice(t2, p.entryPrice)}`;
+      }
+
+      const tp2Dist = document.getElementById('shortTp2Dist');
+      if (tp2Dist) tp2Dist.textContent = `-${p.tp2DistancePct}%`;
+
+      const sl = document.getElementById('shortStopLoss');
+      if (sl) {
+        const slp = Number(p.stopLoss) || 0;
+        sl.textContent = `$${formatCryptoPrice(slp, p.entryPrice)}`;
+      }
+
+      const slDist = document.getElementById('shortStopDist');
+      if (slDist) slDist.textContent = `+${p.stopDistancePct}%`;
+
+      const htf = document.getElementById('shortHtfTrend');
+      if (htf) {
+        htf.textContent = p.htfTrend || 'BEARISH';
+        htf.className = p.htfTrend === 'BEARISH' ? 'font-bold text-rose-400' : 'font-bold text-emerald-400';
+      }
+
+      const cvd = document.getElementById('shortMicroCvd');
+      if (cvd) {
+        const val = p.microCvd5m || 0;
+        const sign = val >= 0 ? '+' : '';
+        cvd.textContent = `${sign}$${(val / 1000).toFixed(1)}k`;
+        cvd.className = val >= 0 ? 'font-bold text-emerald-400' : 'font-bold text-rose-400';
+      }
+
+      const abs = document.getElementById('shortAbsorption');
+      if (abs) {
+        abs.textContent = (p.priceCvdDivergence || 'NONE').replace(/_/g, ' ');
+      }
+
+      const liq = document.getElementById('shortLiqPool');
+      if (liq) {
+        const magnet = p.longLiqPool50x;
+        liq.textContent = magnet && magnet > 0 ? `$${formatCryptoPrice(magnet, p.entryPrice || magnet)}` : '$--';
+      }
+
+      const notional = document.getElementById('shortNotional');
+      if (notional) notional.textContent = `$${Number(p.recommendedNotionalUsdt || 0).toLocaleString()} USDT`;
+
+      const lev = document.getElementById('shortLeverage');
+      if (lev) lev.textContent = `${p.recommendedLeverage}x (Capped)`;
+
+      const margin = document.getElementById('shortMarginReq');
+      if (margin) {
+        const nVal = Number(p.recommendedNotionalUsdt) || 0;
+        const lVal = Number(p.recommendedLeverage) || 1;
+        const mVal = p.marginRequiredUsdt ? p.marginRequiredUsdt.toFixed(2) : (nVal / lVal).toFixed(2);
+        margin.textContent = `$${mVal} USDT @ ${lVal}x`;
+      }
+
+      if (p.predictionSummary) {
+        const f = document.getElementById('shortForecastText');
+        if (f) f.textContent = p.predictionSummary.priceActionForecast || '';
+        const c = document.getElementById('shortCatalystText');
+        if (c) c.textContent = p.predictionSummary.keyCatalyst || '';
+        const i = document.getElementById('shortInvalidationText');
+        if (i) i.textContent = p.predictionSummary.invalidationTrigger || '';
+      }
+    }
+
+    // --- SIMULATE PAPER TRADES (100% READ-ONLY) ---
+    async function simulateLongPosition() {
+      if (!state.longPrediction) {
+        alert('Please run live trade predictions first.');
+        return;
+      }
+      const p = state.longPrediction;
+      await executeSimulationTrade({
+        symbol: p.symbol,
+        direction: 'LONG',
+        entryPrice: p.entryPrice,
+        stopLoss: p.stopLoss,
+        tp1: p.tp1,
+        tp2: p.tp2,
+        notionalUsdt: p.recommendedNotionalUsdt,
+        maxSafeLeverage: p.recommendedLeverage,
+        riskRewardRatio: p.riskRewardRatio,
+        stopDistancePct: p.stopDistancePct
+      });
+    }
+
+    async function simulateShortPosition() {
+      if (!state.shortPrediction) {
+        alert('Please run live trade predictions first.');
+        return;
+      }
+      const p = state.shortPrediction;
+      await executeSimulationTrade({
+        symbol: p.symbol,
+        direction: 'SHORT',
+        entryPrice: p.entryPrice,
+        stopLoss: p.stopLoss,
+        tp1: p.tp1,
+        tp2: p.tp2,
+        notionalUsdt: p.recommendedNotionalUsdt,
+        maxSafeLeverage: p.recommendedLeverage,
+        riskRewardRatio: p.riskRewardRatio,
+        stopDistancePct: p.stopDistancePct
+      });
+    }
+
+    async function executeSimulationTrade(setup) {
+      try {
+        const res = await fetch('/api/execute-setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ setup, mode: 'READ_ONLY_SIMULATION' })
+        });
+        const data = await res.json();
+        if (data.success) {
+          alert(`[100% READ-ONLY SIMULATION]\nSuccessfully registered simulated ${setup.direction} position for ${setup.symbol}!\nLive trailing order tracking active.`);
+          fetchTrades();
+        } else {
+          alert(`Simulation Notice: ${data.error || 'Execution blocked by risk engine.'}`);
+        }
+      } catch (err) {
+        alert(`Execution error: ${err.message}`);
+      }
+    }
+
+    // --- ACTIVE TRADES TABLE ---
+    async function fetchTrades() {
+      try {
+        const res = await fetch('/api/trades');
+        const data = await res.json();
+        state.trades = data.trades || [];
+        updateActiveTradesTable(state.trades.filter(t => t.status === 'ACTIVE' || t.status === 'PENDING_FILL'));
+      } catch (e) {
+        console.warn('Trades fetch notice:', e);
+      }
+    }
+
+    function updateActiveTradesTable(trades) {
+      const tbody = document.getElementById('tradesTableBody');
+      if (!tbody) return;
+
+      if (!trades || trades.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="9" class="py-4 text-center text-slate-500 text-xs font-mono">
+              No active simulated trades. Select a coin and click "Simulate Paper Long/Short" above to track live.
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      tbody.innerHTML = trades.map(t => {
+        const isLong = t.direction === 'LONG';
+        const pnlPct = Number(t.unrealizedPnlPct || 0);
+        const pnlUsdt = Number(t.unrealizedPnlUsdt || 0);
+        const pnlColor = pnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400';
+        const sign = pnlPct >= 0 ? '+' : '';
+
+        return `
+          <tr class="border-b border-brand-border/40 hover:bg-slate-900/40 font-mono text-xs">
+            <td class="py-2 px-2 font-bold text-white">${t.symbol}</td>
+            <td class="py-2 px-2">
+              <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${isLong ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-rose-950 text-rose-400 border border-rose-500/40'}">
+                ${t.direction}
+              </span>
+            </td>
+            <td class="py-2 px-2 text-slate-300">$${formatCryptoPrice(t.entryPrice)}</td>
+            <td class="py-2 px-2 text-white font-bold">$${formatCryptoPrice(t.currentMarkPrice || t.entryPrice)}</td>
+            <td class="py-2 px-2 text-rose-400">$${formatCryptoPrice(t.trailingStopPrice || t.stopLoss)}</td>
+            <td class="py-2 px-2 text-emerald-400">$${formatCryptoPrice(t.tp1)} / $${formatCryptoPrice(t.tp2)}</td>
+            <td class="py-2 px-2 ${pnlColor} font-bold">${sign}${pnlPct.toFixed(2)}% (${sign}$${pnlUsdt.toFixed(2)})</td>
+            <td class="py-2 px-2">
+              <span class="px-1.5 py-0.2 rounded text-[9px] font-bold bg-blue-950 text-blue-300 border border-blue-500/40">
+                ${t.status}
+              </span>
+            </td>
+            <td class="py-2 px-2 text-right space-x-1">
+              <button onclick="moveStopBreakeven('${t.symbol}')" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-600/40 cursor-pointer">
+                SL &rarr; BE
+              </button>
+              <button onclick="panicClose('${t.symbol}')" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-600/40 cursor-pointer">
+                Close
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    async function moveStopBreakeven(symbol) {
+      try {
+        const res = await fetch('/api/position/breakeven', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol })
+        });
+        const data = await res.json();
+        alert(`Stop loss moved to breakeven for ${symbol}`);
+        fetchTrades();
+      } catch (err) {
+        alert(`Failed to move stop: ${err.message}`);
+      }
+    }
+
+    async function panicClose(symbol) {
+      if (!confirm(`Are you sure you want to close simulated position for ${symbol}?`)) return;
+      try {
+        const res = await fetch('/api/position/panic-close', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol })
+        });
+        const data = await res.json();
+        alert(`Position closed for ${symbol}`);
+        fetchTrades();
+      } catch (err) {
+        alert(`Failed to close position: ${err.message}`);
+      }
+    }
+
+    // --- TELEMETRY & AUTOCOMPLETE ---
+    function updateMacroUI(macro) {
+      if (!macro) return;
+      const btcPrice = document.getElementById('headerBtcPrice');
+      const btcChange = document.getElementById('headerBtcChange');
+      const macroState = document.getElementById('headerMacroState');
+
+      if (btcPrice) btcPrice.textContent = `$${formatCryptoPrice(macro.btcPrice)}`;
+      if (btcChange) {
+        const ch = macro.btcChange15mPct || 0;
+        btcChange.textContent = `(${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%)`;
+        btcChange.className = ch >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
+      }
+      if (macroState) {
+        macroState.textContent = macro.macroState || 'STABLE';
+      }
+    }
+
+    async function fetchPortfolio() {
+      try {
+        const res = await fetch('/api/portfolio');
+        const data = await res.json();
+        updatePortfolioUI(data);
+      } catch (e) {
+        console.warn('Portfolio fetch notice:', e);
+      }
+    }
+
+    function updatePortfolioUI(p) {
+      if (!p) return;
+      const eq = document.getElementById('headerEquity');
+      if (eq) {
+        const val = Number(p.equityUsdt ?? p.portfolioEquity ?? 0);
+        eq.textContent = val > 0
+          ? `$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`
+          : `-- USDT`;
+      }
+    }
+
+    function changeCorrelationMode(val) {
+      state.correlationMode = val;
+      if (state.activeSymbol) {
+        triggerDualPredictions();
+      }
+    }
+
+    // Setup Search Autocomplete
+    function setupAutocomplete() {
+      const input = document.getElementById('symbolSearchInput');
+      const list = document.getElementById('autocompleteList');
+      if (!input || !list) return;
+
+      input.addEventListener('input', async (e) => {
+        const q = e.target.value.trim().toUpperCase();
+        if (q.length === 0) {
+          list.classList.add('hidden');
+          return;
+        }
+
+        try {
+          const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+          const data = await res.json();
+          const matches = data.matches || [];
+
+          if (matches.length === 0) {
+            list.innerHTML = `<div class="p-2 text-xs text-slate-500 font-mono">No matching Binance perpetuals found</div>`;
+            list.classList.remove('hidden');
+            return;
+          }
+
+          list.innerHTML = matches.map(s => `
+            <div onclick="selectSearchSymbol('${s}')" class="p-2 hover:bg-slate-800 text-xs font-mono cursor-pointer flex items-center justify-between border-b border-brand-border/40 last:border-0">
+              <span class="font-bold text-white">${s}</span>
+              <span class="text-[10px] text-blue-400">SELECT &rarr;</span>
+            </div>
+          `).join('');
+          list.classList.remove('hidden');
+        } catch (err) {
+          console.warn('Autocomplete fetch notice:', err);
+        }
+      });
+
+      document.addEventListener('click', (e) => {
+        if (!input.contains(e.target) && !list.contains(e.target)) {
+          list.classList.add('hidden');
+        }
+      });
+    }
+
+    function selectSearchSymbol(symbol) {
+      const input = document.getElementById('symbolSearchInput');
+      const list = document.getElementById('autocompleteList');
+      if (input) input.value = '';
+      if (list) list.classList.add('hidden');
+      inspectSymbol(symbol);
+    }
+
+    // Funding Countdown Timer
+    function startFundingCountdown() {
+      setInterval(() => {
+        const el = document.getElementById('fundingCountdown');
+        if (!el) return;
+        const now = Date.now();
+        let target = state.nextFundingTime;
+        if (!target || target <= now) {
+          // Next 8-hour boundary (00:00, 08:00, 16:00 UTC)
+          const d = new Date();
+          const curHour = d.getUTCHours();
+          const nextHour = Math.floor(curHour / 8) * 8 + 8;
+          d.setUTCHours(nextHour, 0, 0, 0);
+          target = d.getTime();
+        }
+        const diff = Math.max(0, target - now);
+        const hours = Math.floor(diff / 3600000);
+        const mins = Math.floor((diff % 3600000) / 60000);
+        const secs = Math.floor((diff % 60000) / 1000);
+        el.textContent = `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      }, 1000);
+    }
+
+    // Bootstrapping
+    window.addEventListener('DOMContentLoaded', () => {
+      initWebSocket();
+      setupAutocomplete();
+      fetchCandidates();
+      fetchPortfolio();
+      fetchTrades();
+      startFundingCountdown();
+
+      // 30-Second candidate radar loop
+      setInterval(fetchCandidates, 30000);
+    });
+  </script>
+</body>
+</html>
+
