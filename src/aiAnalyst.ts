@@ -77,13 +77,29 @@ GUIDELINES:
 - scalpSetup: 5-10 minute rapid scalp targeting immediate micro-magnets (15m MA7, 15m MA25, or local wick) with a 1.5%-4% target, tight stop-loss (1.5%-3%), and hard timeStopMinutes (5-10 mins).
 - swingSetup: Multi-hour swing targeting macro voids (15m MA99, 1h/4h MA25, or short-squeeze continuation) with minimum 1:2.5 Risk/Reward ratio and 2x-3x leverage.`;
 
+const DEFAULT_GEMINI_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash',
+  'gemini-2.5-pro',
+];
+
 export class DualHorizonAIAnalyst {
   private genAI: GoogleGenerativeAI | null = null;
-  private modelName: string;
+  private candidateModels: string[];
+  private unavailableModels: Set<string> = new Set();
+  private preferredModel: string | null = null;
+  private analysisCache: Map<string, { result: DualHorizonAnalysis; timestamp: number }> = new Map();
+  private readonly CACHE_TTL_MS = 15_000;
 
   constructor() {
     const apiKey = (process.env.GEMINI_API_KEY || '').replace(/^["']|["']$/g, '').trim();
-    this.modelName = CONFIG.GEMINI_MODEL || 'gemini-2.5-flash';
+    const envModel = (process.env.GEMINI_MODEL || '').replace(/^["']|["']$/g, '').trim();
+    this.candidateModels = envModel
+      ? [envModel, ...DEFAULT_GEMINI_MODELS.filter((m) => m !== envModel)]
+      : [...DEFAULT_GEMINI_MODELS];
     if (apiKey) {
       this.genAI = new GoogleGenerativeAI(apiKey);
     }
@@ -243,39 +259,63 @@ export class DualHorizonAIAnalyst {
     };
   }
 
-  public async analyzeDualHorizon(payload: CoinIndicatorPayload): Promise<DualHorizonAnalysis> {
+  public async analyzeDualHorizon(payload: CoinIndicatorPayload, forceRefresh = false): Promise<DualHorizonAnalysis> {
+    const cached = this.analysisCache.get(payload.symbol);
+    if (!forceRefresh && cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS) {
+      return cached.result;
+    }
+
     if (!this.genAI) {
       return this.buildDeterministicFallback(payload);
     }
 
-    try {
-      const model = this.genAI.getGenerativeModel({
-        model: this.modelName,
-        systemInstruction: DUAL_HORIZON_SYSTEM_PROMPT,
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0.2,
-        },
-      });
+    // Build ordered list: preferred working model first, skipping any 404/unavailable models
+    const orderedModels = [
+      ...(this.preferredModel && !this.unavailableModels.has(this.preferredModel) ? [this.preferredModel] : []),
+      ...this.candidateModels.filter((m) => m !== this.preferredModel && !this.unavailableModels.has(m)),
+    ];
 
-      const prompt = `Analyze this real-time Binance Futures multi-timeframe payload and return the Dual-Horizon bracketed JSON setups:\n${JSON.stringify(
-        payload,
-        null,
-        2
-      )}`;
-
-      const result = await Promise.race([
-        model.generateContent(prompt),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Gemini timeout (8000ms)')), 8000)),
-      ]);
-
-      const text = result.response.text();
-      const parsed = JSON.parse(text);
-      return this.sanitizeAnalysis(payload, parsed, 'GEMINI_AI');
-    } catch (err: any) {
-      console.warn(`[AIAnalyst] Gemini fallback for ${payload.symbol}:`, err?.message || err);
-      return this.buildDeterministicFallback(payload);
+    // If all models were marked unavailable earlier, reset and retry all
+    const modelsToTry = orderedModels.length > 0 ? orderedModels : [...this.candidateModels];
+    if (orderedModels.length === 0) {
+      this.unavailableModels.clear();
     }
+
+    // Compact JSON saves tokens & latency across thousands of analyses
+    const prompt = `Analyze this real-time Binance Futures payload and return Dual-Horizon bracketed JSON setups:${JSON.stringify(payload)}`;
+
+    for (const modelName of modelsToTry) {
+      try {
+        const model = this.genAI.getGenerativeModel({
+          model: modelName,
+          systemInstruction: DUAL_HORIZON_SYSTEM_PROMPT,
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.2,
+          },
+        });
+
+        const result = await Promise.race([
+          model.generateContent(prompt),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Gemini timeout (${modelName})`)), 7000)),
+        ]);
+
+        const text = result.response.text();
+        const parsed = JSON.parse(text);
+        this.preferredModel = modelName;
+        const sanitized = this.sanitizeAnalysis(payload, parsed, 'GEMINI_AI');
+        this.analysisCache.set(payload.symbol, { result: sanitized, timestamp: Date.now() });
+        return sanitized;
+      } catch (err: any) {
+        const msg = String(err?.message || err || '');
+        if (msg.includes('404') || msg.toLowerCase().includes('not found')) {
+          this.unavailableModels.add(modelName);
+        }
+        console.warn(`[AIAnalyst] Model '${modelName}' failed for ${payload.symbol}: ${msg}. Trying next...`);
+      }
+    }
+
+    return this.buildDeterministicFallback(payload);
   }
 }
 

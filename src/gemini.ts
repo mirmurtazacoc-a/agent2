@@ -110,7 +110,14 @@ export class GeminiStrategyEngine {
   constructor() {
     this.apiKey = (process.env.GEMINI_API_KEY || '').replace(/^["']|["']$/g, '').trim();
     const envModel = process.env.GEMINI_MODEL?.replace(/^["']|["']$/g, '').trim();
-    const defaultModels = ['gemini-3.8-flash'];
+    const defaultModels = [
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.0-flash',
+      'gemini-2.0-flash-lite',
+      'gemini-1.5-flash',
+      'gemini-2.5-pro',
+    ];
     if (envModel) {
       this.priorityModels = [envModel, ...defaultModels.filter((m) => m !== envModel)];
     } else {
