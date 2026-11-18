@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Dual Trade Predictions Matrix | Institutional Binance Quant Engine</title>
+  <title>Dual-Horizon AI Scanner | Institutional Binance Quant Engine</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Tailwind Config -->
@@ -59,9 +59,19 @@
         <span class="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-md shadow-blue-500/50"></span>
         <h1 class="text-sm sm:text-base font-bold tracking-tight text-white flex items-center gap-1.5">
           <span>QUANTUM<span class="text-blue-500">EDGE</span></span>
-          <span class="text-[10px] font-mono font-normal bg-purple-500/10 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded">DUAL PREDICTIONS MATRIX</span>
+          <span class="text-[10px] font-mono font-normal bg-purple-500/10 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded">AI SCANNER</span>
         </h1>
       </div>
+
+      <!-- Page Navigation -->
+      <nav class="flex items-center gap-1 bg-brand-dark/80 border border-brand-border rounded-lg p-0.5 text-[11px] font-mono">
+        <a href="/" class="px-2.5 py-1 rounded bg-purple-600/30 text-purple-200 border border-purple-500/40 font-bold">
+          1. Dual-Horizon Scanner
+        </a>
+        <a href="/predictions" class="px-2.5 py-1 rounded text-slate-400 hover:text-white hover:bg-slate-800/70 transition">
+          2. Prediction Matrix
+        </a>
+      </nav>
 
       <!-- Live WS status indicator -->
       <div class="flex items-center gap-1.5 text-[11px] font-mono text-slate-400 bg-brand-dark/70 border border-brand-border px-2 py-0.5 rounded">
@@ -185,17 +195,24 @@
             </select>
           </div>
 
-          <!-- Main Dual Prediction Action Button -->
-          <button id="btnRunPredictions" onclick="triggerDualPredictions()" class="px-3.5 py-1.5 rounded-lg font-mono font-bold text-xs bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white shadow-lg shadow-indigo-500/30 flex items-center gap-1.5 transition active:scale-95 cursor-pointer whitespace-nowrap">
-            <span id="btnPredictIcon" class="text-sm">⚡</span>
-            <span id="btnPredictText">Run Dual Predictions for <strong id="btnPredictSymbol">--</strong></span>
-          </button>
+          <!-- Main Dual-Horizon Scan Action Button -->
+          <div class="flex items-center gap-2">
+            <button id="btnRunPredictions" onclick="analyzeActiveDualHorizon()" class="px-3.5 py-1.5 rounded-lg font-mono font-bold text-xs bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white shadow-lg shadow-indigo-500/30 flex items-center gap-1.5 transition active:scale-95 cursor-pointer whitespace-nowrap">
+              <span id="btnPredictIcon" class="text-sm">⚡</span>
+              <span id="btnPredictText">Scan Scalp + Swing for <strong id="btnPredictSymbol">--</strong></span>
+            </button>
+            <a href="/predictions" class="px-2.5 py-1.5 rounded-lg font-mono text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition whitespace-nowrap">
+              2nd Page: Prediction Matrix &rarr;
+            </a>
+          </div>
         </div>
       </div>
 
-      <!-- Main Prediction Content Area: 2 Distinct Side-by-Side Views -->
+      <!-- Main Content Area: Dual-Horizon AI Scanner on Main Page -->
       <div class="p-3 sm:p-4 space-y-4 flex-1">
         
+        <!-- Asymmetric Prediction Matrix lives on 2nd page (/predictions) -->
+        <div class="hidden">
         <!-- Header notice pill -->
         <div class="flex items-center justify-between text-xs font-mono text-slate-400 bg-brand-panel/40 border border-brand-border/60 px-3 py-1.5 rounded-lg">
           <div class="flex items-center gap-2">
@@ -506,6 +523,34 @@
           </div>
 
         </div>
+        </div>
+
+        <!-- ===================================================================== -->
+        <!-- DUAL-HORIZON AI SCANNER (SCALP 5-10m + SWING MULTI-HR) -->
+        <!-- ===================================================================== -->
+        <div class="bg-brand-panel border border-brand-border rounded-xl p-3 sm:p-4 space-y-2.5">
+          <div class="flex items-center justify-between flex-wrap gap-2 border-b border-brand-border/60 pb-2">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+              <span class="font-bold text-white text-xs font-mono">DUAL-HORIZON AI SCANNER (SCALP + SWING SETUPS)</span>
+              <span id="dualSetupsCount" class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-500/10 text-purple-300 border border-purple-500/30">0 SETUPS</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="analyzeActiveDualHorizon()" class="px-2.5 py-0.5 rounded text-[10px] font-mono bg-purple-600/20 hover:bg-purple-600/35 text-purple-300 border border-purple-500/40 cursor-pointer">
+                ⚡ Scan Active Coin
+              </button>
+              <button onclick="fetchDualSetups()" class="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer">
+                🔄 Refresh Setups
+              </button>
+            </div>
+          </div>
+
+          <div id="dualSetupsContainer" class="space-y-3">
+            <div class="text-center text-slate-500 font-mono text-xs py-3">
+              Waiting for 3-minute Dual-Horizon scanner (or click "Scan Active Coin")...
+            </div>
+          </div>
+        </div>
 
         <!-- ===================================================================== -->
         <!-- LIVE PAPER TRADE SIMULATION TABLE -->
@@ -656,9 +701,12 @@
         if (msg.candidates) renderCandidates(msg.candidates);
         if (msg.portfolio) updatePortfolioUI(msg.portfolio);
         if (msg.fundingTimestamp) state.nextFundingTime = msg.fundingTimestamp;
+        if (msg.dualSetups) renderDualHorizonSetups(msg.dualSetups);
       } else if (msg.type === 'SCANNER_UPDATE') {
         if (msg.macro) updateMacroUI(msg.macro);
         if (msg.candidates) renderCandidates(msg.candidates);
+      } else if (msg.type === 'DUAL_HORIZON_SETUPS') {
+        if (msg.setups) renderDualHorizonSetups(msg.setups);
       } else if (msg.type === 'TICK_HEARTBEAT') {
         if (msg.openTrades) {
           updateActiveTradesTable(msg.openTrades);
@@ -803,8 +851,8 @@
         console.warn('Fast coin load notice:', err);
       }
 
-      // 2. Trigger Dual Predictions Calculation
-      triggerDualPredictions();
+      // 2. Fetch Dual-Horizon Scalp + Swing Trade Setup for this clicked coin
+      await analyzeActiveDualHorizon();
     }
 
     function updateMicrostructureUI(m) {
@@ -1390,11 +1438,195 @@
       }, 1000);
     }
 
+    function selectSymbol(sym) {
+      inspectSymbol(sym);
+    }
+
+    // --- DUAL-HORIZON AI SCANNER (SCALP + SWING) ---
+    async function fetchDualSetups() {
+      try {
+        const res = await fetch('/api/setups');
+        const data = await res.json();
+        if (data && Array.isArray(data.setups)) {
+          renderDualHorizonSetups(data.setups);
+        }
+      } catch (e) {
+        console.warn('Dual setups fetch notice:', e);
+      }
+    }
+
+    async function analyzeActiveDualHorizon() {
+      const sym = state.activeSymbol || 'BTCUSDT';
+      const container = document.getElementById('dualSetupsContainer');
+      if (container) {
+        container.innerHTML = `<div class="text-center text-purple-300 font-mono text-xs py-3 animate-pulse">Running Dual-Horizon Scalp + Swing analysis for ${sym}...</div>`;
+      }
+      try {
+        const res = await fetch(`/api/analyze/${encodeURIComponent(sym)}`);
+        const data = await res.json();
+        if (data && data.setup) {
+          state.selectedDualSetup = data.setup;
+          renderDualHorizonSetups([data.setup]);
+        } else if (container) {
+          container.innerHTML = `<div class="text-center text-red-400 font-mono text-xs py-3">${data?.error || 'Analysis failed'}</div>`;
+        }
+      } catch (e) {
+        if (container) {
+          container.innerHTML = `<div class="text-center text-red-400 font-mono text-xs py-3">Failed to analyze ${sym}</div>`;
+        }
+      }
+    }
+
+    function renderDualHorizonSetups(setups) {
+      const container = document.getElementById('dualSetupsContainer');
+      const countEl = document.getElementById('dualSetupsCount');
+      if (!container) return;
+
+      if (countEl) {
+        countEl.textContent = `${setups ? setups.length : 0} SETUPS`;
+      }
+
+      if (!setups || setups.length === 0) {
+        container.innerHTML = `<div class="text-center text-slate-500 font-mono text-xs py-3">No Dual-Horizon setups triggered yet. Click "⚡ Scan Active Coin" or wait for the 3-minute scanner.</div>`;
+        return;
+      }
+
+      container.innerHTML = setups.map((s) => {
+        const chgColor = s.priceChange24hPct >= 0 ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' : 'bg-rose-500/15 text-rose-300 border-rose-500/30';
+        const triggers = (s.preFilterReasons || []).join(' • ');
+        const cards = [
+          {
+            icon: '⚡',
+            title: 'SCALP (5–10m)',
+            data: s.scalpSetup,
+            rule: `${s.scalpSetup.timeStopMinutes}m TimeStop`,
+            target: s.scalpSetup.targetMagnet,
+          },
+          {
+            icon: '🌊',
+            title: 'SWING (Multi-Hr)',
+            data: s.swingSetup,
+            rule: `R:R 1:${s.swingSetup.riskRewardRatio}`,
+            target: s.swingSetup.macroTarget,
+          },
+        ];
+
+        const cardsHtml = cards.map(({ icon, title, data, rule, target }) => {
+          const isLong = data.direction === 'LONG';
+          const cardBorder = isLong ? 'border-emerald-500/40 bg-emerald-950/15' : 'border-rose-500/40 bg-rose-950/15';
+          const dirBadge = isLong
+            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+            : 'bg-rose-500/20 text-rose-300 border-rose-500/40';
+
+          const trig = Number(data.triggerPrice) || 0;
+          const sl = Number(data.stopLoss) || 0;
+          const tp = Number(data.takeProfit) || 0;
+          const cur = Number(s.price) || trig;
+
+          const slPct = trig > 0 ? (((sl - trig) / trig) * 100) : 0;
+          const tpPct = trig > 0 ? (((tp - trig) / trig) * 100) : 0;
+          const trigPctFromCur = cur > 0 ? (((trig - cur) / cur) * 100) : 0;
+
+          // Visual SL -> Trigger -> TP bar proportions
+          const riskSpan = Math.abs(trig - sl);
+          const rewardSpan = Math.abs(tp - trig);
+          const totalSpan = riskSpan + rewardSpan || 1;
+          const riskWidthPct = Math.max(15, Math.min(55, (riskSpan / totalSpan) * 100));
+          const rewardWidthPct = 100 - riskWidthPct;
+
+          const minP = Math.min(sl, tp, trig, cur);
+          const maxP = Math.max(sl, tp, trig, cur);
+          const curPosPct = maxP > minP ? Math.max(2, Math.min(98, ((cur - minP) / (maxP - minP)) * 100)) : 50;
+
+          return `
+            <div class="rounded-xl border ${cardBorder} p-3.5 space-y-3 shadow-lg">
+              <!-- Card Header -->
+              <div class="flex items-center justify-between flex-wrap gap-2 border-b border-slate-800/80 pb-2">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm">${icon}</span>
+                  <span class="font-bold text-white text-xs font-mono">${title}</span>
+                  <span class="px-2 py-0.5 rounded border text-[10px] font-black font-mono ${dirBadge}">${data.direction}</span>
+                </div>
+                <div class="flex items-center gap-1.5 font-mono text-[10px]">
+                  <span class="px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-bold">${data.orderType}</span>
+                  <span class="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold">${data.maxLeverage}x</span>
+                  <span class="px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 font-bold">${rule}</span>
+                </div>
+              </div>
+
+              <!-- Visual Risk/Reward Range Bar -->
+              <div class="space-y-1">
+                <div class="flex justify-between text-[10px] font-mono text-slate-400">
+                  <span class="text-rose-400">SL Zone</span>
+                  <span class="text-cyan-300">Entry Trigger &bull; Live $${s.price}</span>
+                  <span class="text-emerald-400">TP Zone</span>
+                </div>
+                <div class="relative h-3 rounded-full overflow-hidden bg-slate-900 border border-slate-700/80 flex">
+                  <div class="bg-gradient-to-r from-rose-600/80 to-rose-400/70 h-full" style="width: ${riskWidthPct.toFixed(1)}%"></div>
+                  <div class="w-0.5 bg-white h-full z-10"></div>
+                  <div class="bg-gradient-to-r from-emerald-500/70 to-emerald-400/90 h-full" style="width: ${rewardWidthPct.toFixed(1)}%"></div>
+                  <div class="absolute top-0 bottom-0 w-1.5 bg-cyan-300 rounded-full shadow shadow-cyan-400 z-20" style="left: calc(${curPosPct.toFixed(1)}% - 3px)" title="Current Price: $${s.price}"></div>
+                </div>
+              </div>
+
+              <!-- 3-Tile Price Grid -->
+              <div class="grid grid-cols-3 gap-2 font-mono text-xs">
+                <div class="bg-brand-dark/90 border border-rose-500/30 rounded-lg p-2">
+                  <div class="text-[9px] text-rose-400 uppercase font-bold">Stop Loss</div>
+                  <div class="text-sm font-bold text-rose-400 mt-0.5">${sl}</div>
+                  <div class="text-[10px] text-rose-500/90">${slPct >= 0 ? '+' : ''}${slPct.toFixed(2)}%</div>
+                </div>
+                <div class="bg-brand-dark/90 border border-cyan-500/35 rounded-lg p-2">
+                  <div class="text-[9px] text-cyan-300 uppercase font-bold">Trigger</div>
+                  <div class="text-sm font-bold text-white mt-0.5">${trig}</div>
+                  <div class="text-[10px] text-slate-400">${trigPctFromCur >= 0 ? '+' : ''}${trigPctFromCur.toFixed(2)}% vs Spot</div>
+                </div>
+                <div class="bg-brand-dark/90 border border-emerald-500/30 rounded-lg p-2">
+                  <div class="text-[9px] text-emerald-400 uppercase font-bold">Take Profit</div>
+                  <div class="text-sm font-bold text-emerald-400 mt-0.5">${tp}</div>
+                  <div class="text-[10px] text-emerald-500/90">${tpPct >= 0 ? '+' : ''}${tpPct.toFixed(2)}%</div>
+                </div>
+              </div>
+
+              <!-- Target & Rationale -->
+              <div class="bg-brand-dark/70 border border-slate-800 rounded-lg p-2.5 space-y-1 text-[11px] font-mono">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-slate-400 text-[10px]">TARGET MAGNET:</span>
+                  <span class="text-cyan-300 font-semibold text-[10px] text-right">${target}</span>
+                </div>
+                <div class="text-slate-300 text-[10px] leading-relaxed">${data.rationale}</div>
+              </div>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="bg-slate-900/50 border border-brand-border rounded-xl p-3 space-y-3">
+            <!-- Coin Banner -->
+            <div class="flex items-center justify-between flex-wrap gap-2 text-xs font-mono">
+              <div class="flex items-center gap-2 flex-wrap">
+                <button onclick="selectSymbol('${s.symbol}')" class="text-sm font-black text-cyan-300 hover:text-cyan-200 underline cursor-pointer">${s.symbol}</button>
+                <span class="text-sm font-bold text-white">$${s.price}</span>
+                <span class="px-2 py-0.5 rounded border text-[10px] font-bold ${chgColor}">24h: ${s.priceChange24hPct >= 0 ? '+' : ''}${s.priceChange24hPct}%</span>
+                <span class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 text-[10px]">Funding: ${(s.fundingRate * 100).toFixed(4)}%</span>
+              </div>
+              <span class="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-purple-300 border border-slate-700 font-bold">${s.source}</span>
+            </div>
+            ${triggers ? `<div class="text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded px-2.5 py-1">${triggers}</div>` : ''}
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
+              ${cardsHtml}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
     // Bootstrapping
     window.addEventListener('DOMContentLoaded', () => {
       initWebSocket();
       setupAutocomplete();
       fetchCandidates();
+      fetchDualSetups();
       fetchPortfolio();
       fetchTrades();
       startFundingCountdown();

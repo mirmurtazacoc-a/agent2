@@ -86,22 +86,179 @@ export class MarketDataEngine {
   // Active Binance Futures USDT symbols list
   private activeSymbols: string[] = [];
 
+  // Last Binance API error (e.g. HTTP 451 geo-block in US Render regions, 429/418 rate-limit)
+  private lastApiError: string | null = null;
+  private rateLimitUntil = 0;
+
+  // Live 24hr ticker cache populated via zero-weight WebSocket (!ticker@arr)
+  private wsTickers: Map<string, any> = new Map();
+
   constructor() {
     this.startLiquidationPruning();
   }
 
-  // --- 1. LIGHTWEIGHT DIRECT PUBLIC REST ENGINE (NO BACKGROUND STREAM OVERHEAD) ---
+  public getLastApiError(): string | null {
+    return this.lastApiError;
+  }
+
+  public isRateLimited(): boolean {
+    return Date.now() < this.rateLimitUntil;
+  }
+
+  private recordApiError(context: string, err: any): void {
+    const status = err?.response?.status;
+    if (status === 451) {
+      this.lastApiError = 'HTTP 451: Binance Futures API is geo-blocked from this server region (use a non-US Render region such as singapore or frankfurt).';
+      console.error(`[MarketDataEngine] ${context} -> ${this.lastApiError}`);
+    } else if (status === 418 || status === 429) {
+      const retryAfterHeader = parseInt(err?.response?.headers?.['retry-after'] || '0', 10);
+      const waitSec = retryAfterHeader > 0 ? retryAfterHeader : (status === 418 ? 180 : 60);
+      this.rateLimitUntil = Math.max(this.rateLimitUntil, Date.now() + waitSec * 1000);
+      this.lastApiError = `HTTP ${status}: Binance rate-limit/IP-ban active. Pausing REST requests for ${waitSec}s.`;
+      console.warn(`[MarketDataEngine] ${context} -> ${this.lastApiError}`);
+    } else {
+      this.lastApiError = `${context}: ${err?.message || 'Unknown error'}`;
+      console.warn(`[MarketDataEngine] ${this.lastApiError}`);
+    }
+  }
+
+  // --- 1. BINANCE FUTURES ZERO-WEIGHT WEBSOCKET + RATE-SAFE REST ---
 
   public startWebSocket(): void {
-    console.log('[MarketDataEngine] Pure Lightweight Mode Active (Fast Binance Public REST). Zero streaming consumption.');
+    if (this.isConnecting || (this.ws && this.ws.readyState === WebSocket.OPEN)) return;
+    this.isConnecting = true;
+
+    const wsUrl = 'wss://fstream.binance.com/stream?streams=!ticker@arr/!markPrice@arr@1s/!forceOrder@arr';
+    try {
+      this.ws = new WebSocket(wsUrl);
+
+      this.ws.on('open', () => {
+        this.isConnecting = false;
+        this.reconnectAttempts = 0;
+        this.lastWsMessageTime = Date.now();
+        console.log('[MarketDataEngine] Connected to Binance Futures Zero-Weight WebSocket (!ticker@arr, !markPrice@arr@1s, !forceOrder@arr).');
+      });
+
+      this.ws.on('message', (raw: WebSocket.RawData) => {
+        this.lastWsMessageTime = Date.now();
+        this.handleWebSocketMessage(raw);
+      });
+
+      this.ws.on('close', () => {
+        this.isConnecting = false;
+        this.scheduleReconnect();
+      });
+
+      this.ws.on('error', (err: Error) => {
+        this.isConnecting = false;
+        console.warn('[MarketDataEngine] Binance WS notice:', err.message);
+      });
+    } catch (err: any) {
+      this.isConnecting = false;
+      console.warn('[MarketDataEngine] Failed to open Binance WS:', err.message);
+      this.scheduleReconnect();
+    }
   }
 
   private scheduleReconnect(): void {
-    // No-op in lightweight REST mode
+    if (this.reconnectTimer) return;
+    const delay = Math.min(this.maxReconnectDelay, 2000 * Math.pow(2, this.reconnectAttempts));
+    this.reconnectAttempts++;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.startWebSocket();
+    }, delay);
   }
 
-  private handleWebSocketMessage(_raw: WebSocket.RawData): void {
-    // No-op in lightweight REST mode
+  private recordPriceHistoryTick(symbol: string, price: number, now: number): void {
+    if (price <= 0) return;
+    let list = this.priceHistory.get(symbol);
+    if (!list) {
+      list = [{ price, timestamp: now }];
+      this.priceHistory.set(symbol, list);
+      return;
+    }
+    const last = list[list.length - 1];
+    // Sample at most once every 15 seconds per symbol to keep 15m rolling window compact
+    if (now - last.timestamp >= 15000) {
+      list.push({ price, timestamp: now });
+      const cutoff = now - 15 * 60 * 1000;
+      while (list.length > 1 && list[0].timestamp < cutoff) {
+        list.shift();
+      }
+    }
+  }
+
+  private handleWebSocketMessage(raw: WebSocket.RawData): void {
+    try {
+      const msg = JSON.parse(raw.toString());
+      const stream: string = msg?.stream || '';
+      const data = msg?.data;
+      const now = Date.now();
+
+      if (stream === '!forceOrder@arr' && data && !Array.isArray(data)) {
+        const o = data.o;
+        const sym = o?.s;
+        if (sym && sym.endsWith('USDT') && !sym.includes('_')) {
+          const price = parseFloat(o.ap || o.p || '0');
+          const origQty = parseFloat(o.q || '0');
+          const notionalUsd = price * origQty;
+          if (notionalUsd > 0) {
+            const list = this.liquidations.get(sym) || [];
+            list.push({
+              symbol: sym,
+              side: o.S === 'BUY' ? 'BUY' : 'SELL',
+              price,
+              origQty,
+              notionalUsd,
+              timestamp: now,
+            });
+            this.liquidations.set(sym, list);
+          }
+        }
+        return;
+      }
+
+      if (!Array.isArray(data)) return;
+
+      if (stream === '!ticker@arr') {
+        for (const t of data) {
+          const sym = t.s;
+          if (!sym || !sym.endsWith('USDT') || sym.includes('_')) continue;
+          this.allUsdtSymbols.add(sym);
+          const lastPrice = parseFloat(t.c || '0');
+          if (lastPrice > 0) {
+            this.recordPriceHistoryTick(sym, lastPrice, now);
+          }
+          this.wsTickers.set(sym, {
+            symbol: sym,
+            lastPrice: t.c,
+            quoteVolume: t.q,
+            highPrice: t.h,
+            lowPrice: t.l,
+            priceChangePercent: t.P,
+          });
+        }
+      } else if (stream === '!markPrice@arr@1s') {
+        for (const m of data) {
+          const sym = m.s;
+          if (!sym || !sym.endsWith('USDT') || sym.includes('_')) continue;
+          const markPrice = parseFloat(m.p || '0');
+          if (markPrice <= 0) continue;
+          this.markPrices.set(sym, {
+            symbol: sym,
+            markPrice,
+            indexPrice: parseFloat(m.i || m.p),
+            estimatedSettlePrice: parseFloat(m.P || m.p),
+            lastFundingRate: parseFloat(m.r || '0'),
+            nextFundingTime: m.T || now + 8 * 3600000,
+            timestamp: now,
+          });
+        }
+      }
+    } catch {
+      // Ignore malformed frame
+    }
   }
 
   // Sliding 15-minute rolling window cleanup every 30 seconds
@@ -516,18 +673,6 @@ export class MarketDataEngine {
     // Liquidations from in-memory sliding window
     const { shortLiqUsd15m, longLiqUsd15m } = this.getLiquidation15m(sym);
 
-    // Squeeze Velocity Score (0 - 100)
-    const squeezeVelocityScore = this.calculateSqueezeVelocityScore({
-      fundingRate,
-      volume15m,
-      candles,
-      openInterest15mDeltaPct,
-      shortLiqUsd15m,
-      longLiqUsd15m,
-      priceChange15mPct,
-      currentPrice,
-    });
-
     // 4-Quadrant Market Regime Classifier
     const regime = this.classifyMarketRegime({
       fundingRate,
@@ -538,6 +683,18 @@ export class MarketDataEngine {
       longLiqUsd15m,
       spotPerpBasisPct,
       obi: orderBook.obi,
+    });
+
+    // Squeeze Velocity Score (0 - 100)
+    const squeezeVelocityScore = this.calculateSqueezeVelocityScore({
+      fundingRate,
+      openInterest15mDeltaPct,
+      takerBuySellRatio15m,
+      obi: orderBook.obi,
+      shortLiqUsd15m,
+      longLiqUsd15m,
+      priceChange15mPct,
+      regime,
     });
 
     // ADL Risk Level (1 to 5)
@@ -900,78 +1057,52 @@ export class MarketDataEngine {
    */
   public calculateSqueezeVelocityScore(params: {
     fundingRate: number;
-    volume15m: number;
-    candles: KlineCandle[];
     openInterest15mDeltaPct: number;
+    takerBuySellRatio15m: number;
+    obi: number;
     shortLiqUsd15m: number;
     longLiqUsd15m: number;
     priceChange15mPct: number;
-    currentPrice: number;
+    regime?: MarketRegime;
   }): number {
-    const { fundingRate, volume15m, candles, openInterest15mDeltaPct, shortLiqUsd15m, longLiqUsd15m, priceChange15mPct } = params;
+    const {
+      fundingRate,
+      openInterest15mDeltaPct,
+      takerBuySellRatio15m,
+      obi,
+      shortLiqUsd15m,
+      longLiqUsd15m,
+      priceChange15mPct,
+      regime,
+    } = params;
 
-    // Component 1: Funding Extremity (0 - 25 points)
-    // Funding rates typically range -0.05% to +0.05%. Extreme negative funding while price rises = max squeeze fuel.
-    let fundingScore = 0;
-    const absFundingPct = Math.abs(fundingRate) * 100;
-    if (fundingRate < 0 && priceChange15mPct > 0) {
-      // Shorts paying longs while price climbs -> high squeeze pressure
-      fundingScore = Math.min(25, (absFundingPct / 0.05) * 25);
-    } else if (fundingRate > 0 && priceChange15mPct < 0) {
-      // Longs paying shorts while price falls -> long squeeze pressure
-      fundingScore = Math.min(25, (absFundingPct / 0.05) * 20);
-    } else {
-      fundingScore = Math.min(15, (absFundingPct / 0.05) * 12);
-    }
+    // 1. Funding Component (0 - 35 pts): -0.15% funding earns full 35 pts
+    const fundingScore = Math.min(35, (Math.abs(fundingRate) / 0.0015) * 35);
 
-    // Component 2: Volume Surge vs 20-period Moving Average (0 - 25 points)
-    let volumeScore = 0;
-    if (candles.length >= 5) {
-      const lookback = candles.slice(-21, -1);
-      const avgVol = lookback.reduce((acc, c) => acc + c.volume, 0) / (lookback.length || 1);
-      if (avgVol > 0) {
-        const volRatio = volume15m / avgVol;
-        if (volRatio >= 3.0) volumeScore = 25;
-        else if (volRatio >= 2.0) volumeScore = 20;
-        else if (volRatio >= 1.5) volumeScore = 15;
-        else if (volRatio >= 1.0) volumeScore = 10;
-        else volumeScore = Math.min(10, volRatio * 8);
-      }
-    } else {
-      volumeScore = 12;
-    }
+    // 2. Signed Open Interest Expansion Component (0 - 30 pts): negative OI capped at 5 pts
+    const oiScore =
+      openInterest15mDeltaPct > 0
+        ? Math.min(30, (openInterest15mDeltaPct / 4.0) * 30)
+        : Math.min(5, Math.abs(openInterest15mDeltaPct));
 
-    // Component 3: Positive Expanding Open Interest 15m Surge Delta % (0 - 30 points)
-    let oiScore = 0;
-    if (openInterest15mDeltaPct > 0) {
-      if (openInterest15mDeltaPct >= 10.0) oiScore = 30;
-      else if (openInterest15mDeltaPct >= 5.0) oiScore = 24;
-      else if (openInterest15mDeltaPct >= 2.5) oiScore = 18;
-      else if (openInterest15mDeltaPct >= 1.0) oiScore = 12;
-      else oiScore = Math.min(10, openInterest15mDeltaPct * 10);
-    } else {
-      oiScore = 0; // Collapsing/negative OI earns zero expansion points
-    }
+    // 3. Order Flow / CVD / OBI Alignment (0 - 20 pts)
+    const flowScore = Math.min(20, Math.abs(takerBuySellRatio15m - 1.0) * 80 + Math.abs(obi) * 25);
 
-    // Component 4: Liquidation Velocity (0 - 20 points)
-    let liqScore = 0;
-    const totalLiq = shortLiqUsd15m + longLiqUsd15m;
-    if (totalLiq >= 1_000_000) liqScore = 20;
-    else if (totalLiq >= 500_000) liqScore = 16;
-    else if (totalLiq >= 200_000) liqScore = 12;
-    else if (totalLiq >= 50_000) liqScore = 8;
-    else if (totalLiq >= 10_000) liqScore = 5;
-    else liqScore = Math.min(5, (totalLiq / 10_000) * 5);
+    // 4. Liquidation + Momentum Velocity (0 - 15 pts)
+    const totalLiqUsd15m = shortLiqUsd15m + longLiqUsd15m;
+    const velocityScore = Math.min(
+      15,
+      (Math.abs(priceChange15mPct) / 2.0) * 10 + (totalLiqUsd15m / 100000) * 5
+    );
 
-    let rawTotal = fundingScore + volumeScore + oiScore + liqScore;
+    let rawTotal = fundingScore + oiScore + flowScore + velocityScore;
 
-    // Negative OI (short-covering exhaustion) penalty factor of 0.55x
-    if (openInterest15mDeltaPct < 0) {
+    // Exhaustion Penalty: prevent exhausted unwinding coins from tying with expanding squeezes
+    if (regime === 'SHORT_COVERING_EXHAUSTION') {
       rawTotal *= 0.55;
     }
 
-    const total = Math.round(rawTotal);
-    return Math.max(0, Math.min(100, total));
+    return Math.max(0, Math.min(100, Math.round(rawTotal)));
   }
 
   /**
@@ -1003,46 +1134,45 @@ export class MarketDataEngine {
       obi,
     } = data;
 
-    // 1. Short Covering Exhaustion evaluated FIRST:
-    // If OI is collapsing (oiDelta15mPct <= -1.0) while funding is negative or price is advancing (> 0.2%),
-    // OR if price pumped (> 0.6%) while OI contracted (<= -0.8%), classify immediately as SHORT_COVERING_EXHAUSTION
+    // 1. Prime Short Squeeze: Requires positive momentum (priceChange15mPct >= -0.25) or order-flow absorption (takerBuySellRatio15m >= 1.06)
     if (
-      (openInterest15mDeltaPct <= -1.0 && (fundingRate < 0 || priceChange15mPct > 0.2)) ||
-      (priceChange15mPct > 0.6 && openInterest15mDeltaPct <= -0.8)
-    ) {
-      return 'SHORT_COVERING_EXHAUSTION';
-    }
-
-    // 2. Prime Short Squeeze: Mandatory OI floor (oiDelta15mPct >= -0.3)
-    if (
-      openInterest15mDeltaPct >= -0.3 &&
-      ((fundingRate <= -0.0005 &&
-        (openInterest15mDeltaPct >= 0.8 || takerBuySellRatio15m >= 1.08 || obi >= 0.12)) ||
-        (shortLiqUsd15m > 25000 && priceChange15mPct > 0.3))
+      openInterest15mDeltaPct >= -0.25 &&
+      (priceChange15mPct >= -0.25 || takerBuySellRatio15m >= 1.06) &&
+      ((fundingRate <= -0.00015 && (openInterest15mDeltaPct >= 0.3 || takerBuySellRatio15m >= 1.04 || obi >= 0.10)) ||
+        (shortLiqUsd15m > 15000 && priceChange15mPct > 0.25) ||
+        (priceChange15mPct >= 0.8 && openInterest15mDeltaPct >= 0.3 && (takerBuySellRatio15m >= 1.06 || obi >= 0.12)))
     ) {
       return 'PRIME_SHORT_SQUEEZE';
     }
 
-    // 3. Prime Long Squeeze: Mandatory OI floor (oiDelta15mPct >= -0.3)
+    // 2. Prime Long Squeeze: Over-leveraged longs with positive funding or active long liquidations / OI-backed breakdown
     if (
-      openInterest15mDeltaPct >= -0.3 &&
-      ((fundingRate >= 0.0005 &&
-        (openInterest15mDeltaPct >= 0.8 || takerBuySellRatio15m <= 0.92 || obi <= -0.12)) ||
-        (longLiqUsd15m > 25000 && priceChange15mPct < -0.3))
+      openInterest15mDeltaPct >= -0.25 &&
+      ((fundingRate >= 0.00015 && priceChange15mPct < -0.15 && (openInterest15mDeltaPct >= 0.3 || takerBuySellRatio15m <= 0.96 || obi <= -0.10)) ||
+        (longLiqUsd15m > 15000 && priceChange15mPct < -0.25) ||
+        (priceChange15mPct <= -0.8 && openInterest15mDeltaPct >= 0.3 && (takerBuySellRatio15m <= 0.94 || obi <= -0.12)))
     ) {
       return 'PRIME_LONG_SQUEEZE';
     }
 
-    // 4. Spot-Led Markup: priceChange15mPct > 0.4 AND (spotPerpBasisPct < -0.02 OR spotPerpBasisPct > 0.02) AND takerBuySellRatio >= 1.05
+    // 3. Short Covering Exhaustion: Price rising solely on closing positions (OI contracting <= -0.8%) without strong taker buy follow-through
     if (
-      priceChange15mPct > 0.4 &&
-      (spotPerpBasisPct < -0.02 || spotPerpBasisPct > 0.02) &&
-      takerBuySellRatio15m >= 1.05
+      priceChange15mPct > 0.35 &&
+      openInterest15mDeltaPct <= -0.8 &&
+      takerBuySellRatio15m < 1.10
+    ) {
+      return 'SHORT_COVERING_EXHAUSTION';
+    }
+
+    // 4. Spot-Led Markup: Clean upward momentum backed by taker buying, bid imbalance, or spot-perp basis
+    if (
+      priceChange15mPct > 0.35 &&
+      (takerBuySellRatio15m >= 1.03 || obi >= 0.10 || Math.abs(spotPerpBasisPct) > 0.015)
     ) {
       return 'SPOT_LED_MARKUP';
     }
 
-    // Neutral default
+    // Neutral default (genuinely balanced / range-bound coin)
     return 'NEUTRAL';
   }
 
@@ -1063,6 +1193,22 @@ export class MarketDataEngine {
   // --- 4. BTC MACRO KILL-SWITCH ---
 
   public async evaluateBtcMacro(): Promise<MacroTelemetry> {
+    if (this.isRateLimited()) {
+      const btcWs = this.wsTickers.get('BTCUSDT');
+      const btcMark = this.markPrices.get('BTCUSDT');
+      const btcPrice = btcMark?.markPrice || parseFloat(btcWs?.lastPrice || '0');
+      if (btcPrice > 0) {
+        const btcChange15mPct = this.getLiveMomentumPct('BTCUSDT', btcPrice);
+        this.btcMacroTelemetry = {
+          ...this.btcMacroTelemetry,
+          btcPrice,
+          btcChange15mPct,
+          btc1hTrend: parseFloat(btcWs?.priceChangePercent || '0') >= 0 ? 'BULLISH' : 'BEARISH',
+          timestamp: Date.now(),
+        };
+      }
+      return this.btcMacroTelemetry;
+    }
     try {
       const btcData = await this.fetchCoinData('BTCUSDT');
       const btcPrice = btcData.price;
@@ -1099,7 +1245,7 @@ export class MarketDataEngine {
         btcEma20_1h,
       };
     } catch (err: any) {
-      console.warn('[MarketDataEngine] Failed to refresh BTC Macro Telemetry:', err.message);
+      this.recordApiError('BTC Macro Telemetry failed', err);
       // If BTC telemetry has been stale for >60s, clear stale blocks to avoid freezing longs indefinitely
       if (Date.now() - this.btcMacroTelemetry.timestamp > 60000) {
         this.btcMacroTelemetry.longsBlocked = false;
@@ -1203,6 +1349,9 @@ export class MarketDataEngine {
   // --- 5. CANDIDATE SCANNER (30-SECOND ENGINE LOOP ACROSS 700+ UNIVERSE) ---
 
   public async refreshActiveSymbols(): Promise<string[]> {
+    if (this.isRateLimited()) {
+      return this.getSymbols();
+    }
     try {
       const res = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo', { timeout: 6000 });
       const symbols = res.data.symbols
@@ -1210,9 +1359,11 @@ export class MarketDataEngine {
         .map((s: any) => s.symbol);
       symbols.forEach((s: string) => this.allUsdtSymbols.add(s));
       this.activeSymbols = Array.from(this.allUsdtSymbols);
+      this.lastApiError = null;
       console.log(`[MarketDataEngine] Synchronized ${this.activeSymbols.length} active Binance USDT perpetuals.`);
       return this.activeSymbols;
     } catch (err: any) {
+      this.recordApiError('exchangeInfo fetch failed', err);
       if (this.allUsdtSymbols.size > 0) {
         return Array.from(this.allUsdtSymbols);
       }
@@ -1230,29 +1381,83 @@ export class MarketDataEngine {
     return ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'DOGEUSDT', 'XRPUSDT', 'SUIUSDT', 'AVAXUSDT', 'LINKUSDT', 'NEARUSDT'];
   }
 
+  private buildCandidatesFromWebSocket(
+    scoredCandidates: { symbol: string; quoteVolume: number; priceChangePercent: number; fundingRate: number; recentLiqUsd: number; anomalyPreScore: number }[]
+  ): CandidateScanResult[] {
+    return scoredCandidates.slice(0, 8).map((c) => {
+      const mark = this.markPrices.get(c.symbol);
+      const ws = this.wsTickers.get(c.symbol);
+      const price = mark?.markPrice || parseFloat(ws?.lastPrice || '0');
+      const liveMom = this.getLiveMomentumPct(c.symbol, price);
+      const change15m = liveMom !== 0 ? liveMom : c.priceChangePercent * 0.15;
+      const { shortLiqUsd15m, longLiqUsd15m } = this.getLiquidation15m(c.symbol);
+      const regime: MarketRegime =
+        (c.fundingRate <= -0.00015 && change15m > 0.15) || (shortLiqUsd15m > 15000 && change15m > 0.2)
+          ? 'PRIME_SHORT_SQUEEZE'
+          : (c.fundingRate >= 0.00015 && change15m < -0.15) || (longLiqUsd15m > 15000 && change15m < -0.2)
+            ? 'PRIME_LONG_SQUEEZE'
+            : change15m >= 0.4
+              ? 'SPOT_LED_MARKUP'
+              : change15m <= -0.5
+                ? 'PRIME_LONG_SQUEEZE'
+                : 'NEUTRAL';
+      const directionSign = change15m >= 0 ? 1 : -1;
+      const confScore = Math.max(-95, Math.min(95, Math.round(directionSign * Math.min(85, 35 + c.anomalyPreScore * 0.5))));
+      return {
+        symbol: c.symbol,
+        price,
+        squeezeVelocityScore: Math.min(98, Math.max(30, Math.round(c.anomalyPreScore))),
+        regime,
+        openInterest15mDeltaPct: 0,
+        fundingRate: c.fundingRate,
+        priceChange15mPct: Number(change15m.toFixed(2)),
+        volume15mUsd: Math.round(c.quoteVolume / 96),
+        shortLiqUsd15m,
+        longLiqUsd15m,
+        obi: 0,
+        topBidWallPrice: price * 0.99,
+        topAskWallPrice: price * 1.01,
+        confluenceScore: confScore,
+        isTradeableAplus: Math.abs(confScore) >= 45,
+      };
+    });
+  }
+
   public async runCandidateScanner(): Promise<CandidateScanResult[]> {
     if (this.isScanning) {
       return this.topCandidates;
     }
     const now = Date.now();
-    if (now - this.lastScanFinishedAt < 10000 && this.topCandidates.length > 0) {
+    if (now - this.lastScanFinishedAt < 15000 && this.topCandidates.length > 0) {
       return this.topCandidates;
     }
 
     this.isScanning = true;
     try {
-      // 1. Refresh BTC macro state
+      // Wait briefly (up to 2.5s) at startup for Zero-Weight WebSocket tickers to arrive before touching REST
+      if (this.wsTickers.size === 0) {
+        for (let w = 0; w < 10 && this.wsTickers.size === 0; w++) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
+
+      // 1. Refresh BTC macro state (uses WS automatically when rate-limited)
       await this.evaluateBtcMacro();
 
-      // 2. Single fast REST call for all 700+ tickers across the entire exchange
+      // 2. Prefer zero-weight WebSocket 24hr ticker cache; fall back to REST only if WS cache is empty and not rate-limited
       let tickers: any[] = [];
-      try {
-        const tickerRes = await axios.get('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 4000 });
-        if (Array.isArray(tickerRes.data)) {
-          tickers = tickerRes.data;
+      if (this.wsTickers.size > 0) {
+        tickers = Array.from(this.wsTickers.values());
+      } else if (!this.isRateLimited()) {
+        try {
+          const tickerRes = await axios.get('https://fapi.binance.com/fapi/v1/ticker/24hr', { timeout: 4000 });
+          if (Array.isArray(tickerRes.data)) {
+            tickers = tickerRes.data;
+            this.lastApiError = null;
+          }
+        } catch (err: any) {
+          this.recordApiError('Batch 24hr ticker fetch failed', err);
         }
-      } catch (err: any) {
-        console.warn('[MarketDataEngine] Batch 24hr ticker fetch notice:', err.message);
       }
 
       interface AnomalyCandidate {
@@ -1266,7 +1471,28 @@ export class MarketDataEngine {
 
       const scoredCandidates: AnomalyCandidate[] = [];
 
-      // 3. Filter entire universe: quoteVolume > $15,000,000 & calculate Anomaly Pre-Score
+      // 3. Compute real-time market breadth across liquid USDT perpetuals + score candidates
+      let liquidCount = 0;
+      let advancingCount = 0;
+      if (tickers.length > 0) {
+        for (const t of tickers) {
+          const sym = t.symbol;
+          if (!sym || !sym.endsWith('USDT') || sym.includes('_')) continue;
+          const qVol = parseFloat(t.quoteVolume || '0');
+          if (qVol >= 10_000_000) {
+            liquidCount++;
+            if (parseFloat(t.priceChangePercent || '0') > 0) advancingCount++;
+          }
+        }
+      }
+      const advancingRatio = liquidCount > 0 ? advancingCount / liquidCount : 0.5;
+      const marketBias: 'BULLISH' | 'BEARISH' | 'MIXED' =
+        this.btcMacroTelemetry.macroState === 'MACRO_DUMP_WARNING' || (this.btcMacroTelemetry.btc1hTrend === 'BEARISH' && advancingRatio <= 0.45)
+          ? 'BEARISH'
+          : this.btcMacroTelemetry.macroState === 'MACRO_SQUEEZE_TAILWIND' || (this.btcMacroTelemetry.btc1hTrend === 'BULLISH' && advancingRatio >= 0.55)
+            ? 'BULLISH'
+            : 'MIXED';
+
       if (tickers.length > 0) {
         for (const t of tickers) {
           const sym = t.symbol;
@@ -1275,7 +1501,8 @@ export class MarketDataEngine {
           this.allUsdtSymbols.add(sym);
 
           const lastPrice = parseFloat(t.lastPrice || '0');
-          if (lastPrice > 0) {
+          // Only seed markPrices if !markPrice@arr@1s hasn't populated a live funding rate yet
+          if (lastPrice > 0 && !this.markPrices.has(sym)) {
             this.markPrices.set(sym, {
               symbol: sym,
               markPrice: lastPrice,
@@ -1300,19 +1527,30 @@ export class MarketDataEngine {
           const fundingRate = mark?.lastFundingRate ?? 0.0001;
           const { shortLiqUsd15m, longLiqUsd15m } = this.getLiquidation15m(sym);
           const recentLiqUsd = shortLiqUsd15m + longLiqUsd15m;
-          const liveMomPct = Math.abs(this.getLiveMomentumPct(sym, mark?.markPrice));
+          const signedLiveMomPct = this.getLiveMomentumPct(sym, mark?.markPrice || lastPrice);
+          const liveMomPct = Math.abs(signedLiveMomPct);
 
-          // Boost coins with extreme/non-baseline funding skew (< -0.0005 or > 0.0003)
-          const fundingSkewBoost = (fundingRate < -0.0005 || fundingRate > 0.0003) ? 40.0 : 0;
+          // Extreme funding skew: negative funding = short-squeeze fuel, high positive funding = long-squeeze fuel
+          const fundingSkewBoost = (fundingRate < -0.0003 || fundingRate > 0.0003) ? 35.0 : 0;
+          const liqLogBoost = Math.min(25, recentLiqUsd / 40000);
+          const liquidityBoost = Math.min(8, Math.log10(quoteVolume / 10_000_000) * 4);
 
-          // Anomaly Pre-Score formula:
-          // Math.abs(fundingRate) * 25000 + (liveMomPct * 4.0) + Math.min(10, Math.abs(priceChangePercent) * 0.25) + (recentLiqUsd / 50000) + fundingSkewBoost
+          // Market-macro alignment bonus: boost coins actively moving WITH current market/BTC direction or extreme counter-squeeze
+          let macroAlignBoost = 0;
+          if (marketBias === 'BULLISH' && (signedLiveMomPct > 0.3 || (priceChangePercent > 2 && fundingRate < -0.0002))) {
+            macroAlignBoost = 12;
+          } else if (marketBias === 'BEARISH' && (signedLiveMomPct < -0.3 || (priceChangePercent < -2 && fundingRate > 0.0002))) {
+            macroAlignBoost = 12;
+          }
+
           const anomalyPreScore =
-            Math.abs(fundingRate) * 25000 +
-            liveMomPct * 4.0 +
-            Math.min(10, Math.abs(priceChangePercent) * 0.25) +
-            recentLiqUsd / 50000 +
-            fundingSkewBoost;
+            Math.abs(fundingRate) * 30000 +
+            liveMomPct * 5.0 +
+            Math.min(12, Math.abs(priceChangePercent) * 0.35) +
+            liqLogBoost +
+            liquidityBoost +
+            fundingSkewBoost +
+            macroAlignBoost;
 
           scoredCandidates.push({
             symbol: sym,
@@ -1359,61 +1597,79 @@ export class MarketDataEngine {
       // Sort by Anomaly Pre-Score descending
       scoredCandidates.sort((a, b) => b.anomalyPreScore - a.anomalyPreScore);
 
-      // Take TOP 12 most extreme anomaly coins from the entire exchange for deep microstructure evaluation
-      const top12 = scoredCandidates.slice(0, 12);
+      // Take TOP 10 most extreme anomaly coins and evaluate in staggered batches of 2 to avoid Binance 429/418 bursts
+      const topCandidatesPool = scoredCandidates.slice(0, 10);
+      const scanResults: (CandidateScanResult & { _opportunityRank: number })[] = [];
 
-      // Run parallel microstructure + 15m klines on all 12 in parallel and pre-cache their candles & microstructure!
-      const fetchPromises = top12.map(async (c) => {
-        try {
-          const data = await this.fetchCoinData(c.symbol);
-          const conf = this.calculateConfluenceMatrix(data, this.btcMacroTelemetry);
-          return {
-            symbol: data.symbol,
-            price: data.price,
-            squeezeVelocityScore: data.squeezeVelocityScore,
-            regime: data.regime,
-            openInterest15mDeltaPct: data.openInterest15mDeltaPct,
-            fundingRate: data.fundingRate,
-            priceChange15mPct: data.priceChange15mPct,
-            volume15mUsd: data.volume15m * data.price,
-            shortLiqUsd15m: data.shortLiqUsd15m,
-            longLiqUsd15m: data.longLiqUsd15m,
-            obi: data.orderBook.obi,
-            topBidWallPrice: data.orderBook.topBidWall.price,
-            topAskWallPrice: data.orderBook.topAskWall.price,
-            confluenceScore: conf.score,
-            isTradeableAplus: Math.abs(conf.score) >= 45,
-          } as CandidateScanResult;
-        } catch (err) {
-          return null;
+      for (let i = 0; i < topCandidatesPool.length; i += 2) {
+        if (this.isRateLimited()) break;
+        const batch = topCandidatesPool.slice(i, i + 2);
+        const batchResults = await Promise.all(
+          batch.map(async (c) => {
+            try {
+              const data = await this.fetchCoinData(c.symbol);
+              // Blend standalone coin structure with BTC/market-coupled macro influence
+              const standaloneConf = this.calculateConfluenceMatrix(data, this.btcMacroTelemetry, 'STANDALONE_ALPHA');
+              const coupledConf = this.calculateConfluenceMatrix(data, this.btcMacroTelemetry, 'BTC_COUPLED');
+              const blendedConfluence = Math.round(standaloneConf.score * 0.65 + coupledConf.score * 0.35);
+
+              // Directional market-alignment bonus (rewards coins poised to increase in bullish market or decrease in bearish market)
+              const isAlignedWithMarket =
+                (marketBias === 'BULLISH' && blendedConfluence > 0) ||
+                (marketBias === 'BEARISH' && blendedConfluence < 0);
+              const marketBonus = isAlignedWithMarket ? 12 : 0;
+              const isActiveRegime = data.regime !== 'NEUTRAL';
+              const opportunityRank =
+                Math.abs(blendedConfluence) * 0.6 +
+                data.squeezeVelocityScore * 0.4 +
+                (isActiveRegime ? 15 : 0) +
+                marketBonus;
+
+              return {
+                symbol: data.symbol,
+                price: data.price,
+                squeezeVelocityScore: data.squeezeVelocityScore,
+                regime: data.regime,
+                openInterest15mDeltaPct: data.openInterest15mDeltaPct,
+                fundingRate: data.fundingRate,
+                priceChange15mPct: data.priceChange15mPct,
+                volume15mUsd: data.volume15m * data.price,
+                shortLiqUsd15m: data.shortLiqUsd15m,
+                longLiqUsd15m: data.longLiqUsd15m,
+                obi: data.orderBook.obi,
+                topBidWallPrice: data.orderBook.topBidWall.price,
+                topAskWallPrice: data.orderBook.topAskWall.price,
+                confluenceScore: blendedConfluence,
+                isTradeableAplus: Math.abs(blendedConfluence) >= 45,
+                _opportunityRank: opportunityRank,
+              };
+            } catch (err: any) {
+              this.recordApiError(`Candidate fetch (${c.symbol}) failed`, err);
+              return null;
+            }
+          })
+        );
+        for (const r of batchResults) {
+          if (r !== null) scanResults.push(r);
         }
-      });
+        if (i + 2 < topCandidatesPool.length && !this.isRateLimited()) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
 
-      const scanResults = (await Promise.all(fetchPromises)).filter(
-        (r): r is CandidateScanResult => r !== null
-      );
-
-      // Sort final scan results: Tradeable A+ Setups (|Confluence| >= 45) strictly outrank non-A+,
-      // active regimes (PRIME_SHORT_SQUEEZE, PRIME_LONG_SQUEEZE, SPOT_LED_MARKUP, etc.) outrank NEUTRAL,
-      // then sort by squeezeVelocityScore descending
-      const getRegimeRank = (r: MarketRegime) => {
-        if (r === 'PRIME_SHORT_SQUEEZE' || r === 'PRIME_LONG_SQUEEZE' || r === 'SPOT_LED_MARKUP') return 2;
-        if (r !== 'NEUTRAL') return 1;
-        return 0;
-      };
-
+      // Sort final scan results by A+ tradeability, then composite real-time opportunityRank (directional conviction + squeeze velocity + market alignment)
       scanResults.sort((a, b) => {
         const aTradeable = a.isTradeableAplus ? 1 : 0;
         const bTradeable = b.isTradeableAplus ? 1 : 0;
         if (bTradeable !== aTradeable) return bTradeable - aTradeable;
-
-        const rankDiff = getRegimeRank(b.regime) - getRegimeRank(a.regime);
-        if (rankDiff !== 0) return rankDiff;
-        return b.squeezeVelocityScore - a.squeezeVelocityScore;
+        return b._opportunityRank - a._opportunityRank;
       });
 
       if (scanResults.length > 0) {
-        this.topCandidates = scanResults.slice(0, 8);
+        this.topCandidates = scanResults.slice(0, 8).map(({ _opportunityRank, ...rest }) => rest);
+      } else if (scoredCandidates.length > 0) {
+        // Zero-REST WebSocket fallback when Binance REST is rate-limited (418/429)
+        this.topCandidates = this.buildCandidatesFromWebSocket(scoredCandidates);
       }
       this.lastScanTime = Date.now();
       return this.topCandidates;

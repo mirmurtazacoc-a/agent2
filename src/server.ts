@@ -10,6 +10,9 @@ import { paperTrading } from './paperTrading';
 import { geminiStrategy } from './gemini';
 import { BracketTradeSetup, CorrelationMode } from './types';
 import { CONFIG } from './config';
+import { futuresScanner } from './scanner';
+import { buildIndicatorPayload } from './indicators';
+import { dualHorizonAnalyst, DualHorizonAnalysis } from './aiAnalyst';
 
 dotenv.config();
 
@@ -29,7 +32,7 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 app.get('/predictions', (req: Request, res: Response) => {
-  res.sendFile(path.join(__dirname, '../public/index.html'));
+  res.sendFile(path.join(__dirname, '../public/predictions.html'));
 });
 
 // Create HTTP server
@@ -61,6 +64,8 @@ wss.on('connection', async (ws: WebSocket) => {
       nextFundingTime: fundingTimestamp,
       portfolio,
       equityUsdt: portfolio.equityUsdt,
+      dualSetups: latestDualSetups,
+      lastDualScanAt,
     };
 
     if (ws.readyState === WebSocket.OPEN) {
@@ -110,6 +115,7 @@ app.get('/api/status', async (req: Request, res: Response) => {
       timestamp: Date.now(),
       binanceWsConnected: wsConnected,
       binanceWsLatencyMs: wsLatencyMs,
+      binanceApiError: marketData.getLastApiError(),
       isPriceFeedFresh: wsConnected && wsLatencyMs >= 0 && wsLatencyMs < 12000,
       mongoDbConnected: paperTrading.isDbConnected(),
       macro,
@@ -140,8 +146,8 @@ app.get('/api/scan', async (req: Request, res: Response) => {
       nextFundingTime: fundingTimestamp,
     });
 
-    // Trigger async background refresh if candidate list was cold
-    if (candidates.length <= 8) {
+    // Trigger async background refresh if candidate list is cold (uses Zero-Weight WS if REST is rate-limited)
+    if (candidates.length === 0) {
       marketData.runCandidateScanner().catch(() => { });
     }
   } catch (err: any) {
@@ -543,6 +549,177 @@ app.post('/api/position/panic-close', async (req: Request, res: Response) => {
   }
 });
 
+// --- DUAL-HORIZON CLI DASHBOARD & API ENDPOINTS ---
+
+let latestDualSetups: DualHorizonAnalysis[] = [];
+let lastDualScanAt = 0;
+
+function printDualHorizonTable(setup: DualHorizonAnalysis): void {
+  const C = {
+    reset: '\x1b[0m',
+    bold: '\x1b[1m',
+    cyan: '\x1b[36m',
+    green: '\x1b[32m',
+    red: '\x1b[31m',
+    yellow: '\x1b[33m',
+    magenta: '\x1b[35m',
+    dim: '\x1b[2m',
+  };
+  const dirColor = (d: string) => (d === 'LONG' ? C.green : C.red);
+
+  console.log(
+    `\n${C.bold}${C.cyan}╔══════════════════════════════════════════════════════════════════════════════╗${C.reset}`
+  );
+  console.log(
+    `${C.bold}${C.cyan}║${C.reset} ${C.bold}${setup.symbol}${C.reset}  Price: ${C.yellow}$${setup.price}${C.reset}  24h: ${setup.priceChange24hPct >= 0 ? C.green : C.red}${setup.priceChange24hPct}%${C.reset}  Funding: ${(setup.fundingRate * 100).toFixed(4)}%  [${C.magenta}${setup.source}${C.reset}]`
+  );
+  if (setup.preFilterReasons.length > 0) {
+    console.log(`${C.dim}  Trigger: ${setup.preFilterReasons.join(' | ')}${C.reset}`);
+  }
+  console.table([
+    {
+      Horizon: 'SCALP (5-10m)',
+      Direction: setup.scalpSetup.direction,
+      OrderType: setup.scalpSetup.orderType,
+      Trigger: setup.scalpSetup.triggerPrice,
+      StopLoss: setup.scalpSetup.stopLoss,
+      TakeProfit: setup.scalpSetup.takeProfit,
+      Leverage: `${setup.scalpSetup.maxLeverage}x`,
+      Rule: `${setup.scalpSetup.timeStopMinutes}m TimeStop`,
+      Target: setup.scalpSetup.targetMagnet,
+    },
+    {
+      Horizon: 'SWING (Multi-Hr)',
+      Direction: setup.swingSetup.direction,
+      OrderType: setup.swingSetup.orderType,
+      Trigger: setup.swingSetup.triggerPrice,
+      StopLoss: setup.swingSetup.stopLoss,
+      TakeProfit: setup.swingSetup.takeProfit,
+      Leverage: `${setup.swingSetup.maxLeverage}x`,
+      Rule: `R:R 1:${setup.swingSetup.riskRewardRatio}`,
+      Target: setup.swingSetup.macroTarget,
+    },
+  ]);
+  console.log(
+    `  ${dirColor(setup.scalpSetup.direction)}[SCALP]${C.reset} ${setup.scalpSetup.rationale}`
+  );
+  console.log(
+    `  ${dirColor(setup.swingSetup.direction)}[SWING]${C.reset} ${setup.swingSetup.rationale}`
+  );
+  console.log(
+    `${C.cyan}╚══════════════════════════════════════════════════════════════════════════════╝${C.reset}`
+  );
+}
+
+async function runDualHorizonScanCycle(): Promise<DualHorizonAnalysis[]> {
+  const scannedCoins = await futuresScanner.scanTopVolatileCoins();
+  if (scannedCoins.length === 0) return latestDualSetups;
+
+  const generated: DualHorizonAnalysis[] = [];
+  for (const coin of scannedCoins) {
+    const payload = buildIndicatorPayload(coin);
+    if (!payload.preFilter.passed) continue;
+
+    const analysis = await dualHorizonAnalyst.analyzeDualHorizon(payload);
+    generated.push(analysis);
+    printDualHorizonTable(analysis);
+  }
+
+  if (generated.length > 0) {
+    latestDualSetups = generated;
+  }
+  lastDualScanAt = Date.now();
+  broadcastToClients({
+    type: 'DUAL_HORIZON_SETUPS',
+    lastScanAt: lastDualScanAt,
+    setups: latestDualSetups,
+  });
+  return latestDualSetups;
+}
+
+/**
+ * GET /api/setups - Latest AI-analyzed Dual-Horizon (Scalp + Swing) setups
+ */
+app.get('/api/setups', (req: Request, res: Response) => {
+  res.json({
+    capitalUsd: CONFIG.ACCOUNT_CAPITAL_USD,
+    noMarketOrders: CONFIG.NO_MARKET_ORDERS,
+    lastScanAt: lastDualScanAt,
+    count: latestDualSetups.length,
+    setups: latestDualSetups,
+  });
+});
+
+/**
+ * GET /api/analyze/:symbol - Force instant real-time scan & Dual-Horizon analysis for a specific coin
+ */
+app.get('/api/analyze/:symbol', async (req: Request, res: Response) => {
+  try {
+    const rawSym = String(req.params.symbol || '').toUpperCase().trim();
+    if (!rawSym) {
+      return res.status(400).json({ error: 'Symbol parameter is required (e.g. BTCUSDT or JCTUSDT).' });
+    }
+    let coinData;
+    try {
+      if (marketData.isRateLimited() || futuresScanner.isRateLimited()) {
+        throw new Error('Binance REST rate-limit cooldown active');
+      }
+      coinData = await futuresScanner.fetchCoinMultiTimeframe(rawSym);
+    } catch (scanErr: any) {
+      // Zero-REST WebSocket fallback when Binance REST is in a 418/429 cooldown
+      const sym = rawSym.endsWith('USDT') ? rawSym : `${rawSym}USDT`;
+      const mark = marketData.getLatestMarkPrice(sym);
+      const candidate = marketData.getTopCandidates().find((c) => c.symbol === sym);
+      const livePrice = mark?.markPrice || candidate?.price || 0;
+      if (livePrice <= 0) {
+        return res.status(503).json({ error: `Binance REST rate-limited (${scanErr?.message}) and no live WebSocket price cached yet for ${sym}.` });
+      }
+      const now = Date.now();
+      const synthCandle = {
+        timestamp: now,
+        open: livePrice * 0.996,
+        high: livePrice * 1.005,
+        low: livePrice * 0.994,
+        close: livePrice,
+        volume: candidate?.volume15mUsd ? candidate.volume15mUsd / livePrice : 100000,
+      };
+      coinData = {
+        symbol: sym,
+        ccxtSymbol: futuresScanner.normalizeToCcxtSymbol(sym),
+        price: livePrice,
+        priceChange24hPct: candidate?.priceChange15mPct ? candidate.priceChange15mPct * 4 : 0,
+        quoteVolume24hUsdt: (candidate?.volume15mUsd || 500000) * 96,
+        fundingRate: mark?.lastFundingRate ?? candidate?.fundingRate ?? 0.0001,
+        candles15m: [synthCandle],
+        candles1h: [synthCandle],
+        candles4h: [synthCandle],
+        scannedAt: now,
+      };
+    }
+    const indicatorPayload = buildIndicatorPayload(coinData);
+    const setup = await dualHorizonAnalyst.analyzeDualHorizon(indicatorPayload);
+    printDualHorizonTable(setup);
+
+    // Upsert into latestDualSetups cache
+    latestDualSetups = [setup, ...latestDualSetups.filter((s) => s.symbol !== setup.symbol)].slice(0, 12);
+    lastDualScanAt = Date.now();
+    broadcastToClients({
+      type: 'DUAL_HORIZON_SETUPS',
+      lastScanAt: lastDualScanAt,
+      setups: latestDualSetups,
+    });
+
+    res.json({
+      capitalUsd: CONFIG.ACCOUNT_CAPITAL_USD,
+      noMarketOrders: CONFIG.NO_MARKET_ORDERS,
+      indicatorPayload,
+      setup,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to analyze symbol' });
+  }
+});
+
 // --- ENGINE INITIALIZATION & BACKGROUND LOOPS ---
 
 async function startEngine(): Promise<void> {
@@ -578,7 +755,7 @@ async function startEngine(): Promise<void> {
     }
   })();
 
-  // 4. Start Background 30-Second Scanner Loop with In-Flight Guard (Item #14)
+  // 4. Start Background 60-Second Scanner Loop with In-Flight Guard (Item #14)
   let isPeriodicScanning = false;
   setInterval(async () => {
     if (isPeriodicScanning) return;
@@ -597,7 +774,7 @@ async function startEngine(): Promise<void> {
     } finally {
       isPeriodicScanning = false;
     }
-  }, 30000);
+  }, 60000);
 
   // 5. Broadcast 3-Second Ticker & Paper Trades Heartbeat to WebSockets (Item #14: getActiveTrades without 100 limit)
   setInterval(async () => {
