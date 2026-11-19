@@ -188,7 +188,7 @@ const styles = StyleSheet.create({
   controlsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'between',
+    justifyContent: 'space-between',
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderBottomWidth: 1,

@@ -40,14 +40,16 @@ export const PositionsList: React.FC<PositionsListProps> = ({
 
   const renderTradeItem = ({ item }: { item: PaperTrade }) => {
     const isLong = item.direction === 'LONG';
-    const pnlPct = Number(item.unrealizedPnlPct || 0);
-    const pnlUsdt = Number(item.unrealizedPnlUsdt || 0);
+    const entryPrice = Number(item.entryPrice || 0);
+    const currentMark = Number(item.currentMarkPrice ?? item.currentPrice ?? entryPrice);
+    const stop = Number(item.trailingStopPrice ?? item.stopLoss ?? 0);
+    const rawDiff = isLong ? currentMark - entryPrice : entryPrice - currentMark;
+    const computedPct = entryPrice > 0 ? (rawDiff / entryPrice) * 100 : 0;
+    const pnlPct = Number(item.unrealizedPnlPct ?? computedPct);
+    const pnlUsdt = Number(item.unrealizedPnlUsdt ?? item.unrealizedPnL ?? 0);
     const isProfit = pnlPct >= 0;
     const pnlColor = isProfit ? '#34d399' : '#fb7185';
     const sign = isProfit ? '+' : '';
-
-    const currentMark = item.currentMarkPrice || item.entryPrice;
-    const stop = item.trailingStopPrice || item.stopLoss;
 
     return (
       <View style={styles.tradeCard}>
@@ -120,7 +122,7 @@ export const PositionsList: React.FC<PositionsListProps> = ({
     <View style={styles.container}>
       <FlatList
         data={activeTrades}
-        keyExtractor={(item, index) => item.id || `${item.symbol}_${index}`}
+        keyExtractor={(item, index) => item.id || item.tradeId || `${item.symbol}_${index}`}
         renderItem={renderTradeItem}
         refreshControl={
           <RefreshControl

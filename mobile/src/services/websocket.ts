@@ -19,6 +19,9 @@ class WebSocketClient {
 
   public connect(): void {
     this.isExplicitlyClosed = false;
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     const wsUrl = config.getWsUrl();
 
     try {

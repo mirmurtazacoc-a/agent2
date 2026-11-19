@@ -10,20 +10,25 @@ import { marketData } from './marketData';
 
 export interface IPaperTrade {
   tradeId: string;
+  id?: string;
   symbol: string;
   direction: TradeDirection;
   regime: MarketRegime;
   entryPrice: number;
   targetPrice: number;
   currentPrice: number;
+  currentMarkPrice?: number;
   stopLoss: number;
+  trailingStopPrice?: number;
   originalStopLoss: number;
   tp1: number;
   tp2: number;
   quantity: number;
   initialNotional: number;
   currentNotional: number;
+  notionalUsdt?: number;
   leverage: number;
+  maxSafeLeverage?: number;
   status: TradeStatus;
   flowHealth?: 'STRONG' | 'STALLING' | 'REVERSAL_WARNING';
   tp1Hit: boolean;
@@ -35,6 +40,8 @@ export interface IPaperTrade {
   mfeUsd: number;
   realizedPnL: number;
   unrealizedPnL: number;
+  unrealizedPnlUsdt?: number;
+  unrealizedPnlPct?: number;
   feesPaid: number;
   createdAt: Date;
   openedAt?: Date;
@@ -55,8 +62,23 @@ class InMemoryTradeStore {
     const existing = this.trades.get(trade.tradeId);
     const merged = { ...(existing ? (existing as any).toObject?.() || existing : {}), ...trade };
     merged._id = merged._id || trade.tradeId;
+    merged.id = merged.tradeId;
+    merged.currentMarkPrice = merged.currentPrice;
+    merged.trailingStopPrice = merged.stopLoss;
+    merged.notionalUsdt = merged.currentNotional;
+    merged.maxSafeLeverage = merged.leverage;
+    merged.unrealizedPnlUsdt = merged.unrealizedPnL;
+    if (merged.entryPrice > 0 && merged.currentPrice > 0) {
+      const diff = merged.direction === 'LONG' ? merged.currentPrice - merged.entryPrice : merged.entryPrice - merged.currentPrice;
+      merged.unrealizedPnlPct = Number(((diff / merged.entryPrice) * 100).toFixed(2));
+    } else {
+      merged.unrealizedPnlPct = 0;
+    }
     merged.save = async () => this.save(merged);
-    merged.toObject = () => ({ ...merged });
+    merged.toObject = () => {
+      const { save, toObject, ...clean } = merged;
+      return clean;
+    };
     this.trades.set(trade.tradeId, merged as IPaperTrade);
     return merged as IPaperTrade;
   }
@@ -154,7 +176,8 @@ export class PaperTradingEngine {
       maxHoldMinutes: 240,
     };
 
-    return this.inMemoryStore.save(tradeDoc) as unknown as PaperTradeRecord;
+    const saved = this.inMemoryStore.save(tradeDoc);
+    return (typeof (saved as any).toObject === 'function' ? (saved as any).toObject() : saved) as unknown as PaperTradeRecord;
   }
 
   // --- 2. TICK-ACCURATE 3-SECOND EVALUATION LOOP ---
@@ -415,7 +438,10 @@ export class PaperTradingEngine {
   }
 
   public async getAllTrades(): Promise<PaperTradeRecord[]> {
-    return this.inMemoryStore.find().sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) as unknown as PaperTradeRecord[];
+    return this.inMemoryStore
+      .find()
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map((t) => (typeof (t as any).toObject === 'function' ? (t as any).toObject() : t)) as unknown as PaperTradeRecord[];
   }
 
   // --- 3. HISTORICAL PERFORMANCE RAG METRICS FOR GEMINI COPILOT ---

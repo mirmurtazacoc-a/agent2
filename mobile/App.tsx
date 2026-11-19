@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   SafeAreaView,
   View,
@@ -20,6 +20,7 @@ import {
 } from './src/types';
 import { api } from './src/services/api';
 import { wsClient } from './src/services/websocket';
+import { config } from './src/config';
 import { SqueezeRadar } from './src/components/SqueezeRadar';
 import { LongPredictionCard } from './src/components/LongPredictionCard';
 import { ShortPredictionCard } from './src/components/ShortPredictionCard';
@@ -49,6 +50,11 @@ export default function App() {
   const [refreshingTrades, setRefreshingTrades] = useState(false);
   const [predictingLoading, setPredictingLoading] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
+  const activeSymbolRef = useRef(activeSymbol);
+
+  useEffect(() => {
+    activeSymbolRef.current = activeSymbol;
+  }, [activeSymbol]);
 
   // Initialize Data & WebSocket
   useEffect(() => {
@@ -62,13 +68,18 @@ export default function App() {
       if (!msg || !msg.type) return;
 
       if (msg.type === 'INIT_SNAPSHOT' || msg.type === 'SCANNER_UPDATE') {
-        if (msg.candidates) setCandidates(msg.candidates);
+        if (msg.candidates) {
+          setCandidates(msg.candidates);
+        }
         if (msg.macro) setMacro(msg.macro);
         if (msg.portfolio?.equityUsdt) setEquityUsdt(msg.portfolio.equityUsdt);
+        else if (msg.equityUsdt) setEquityUsdt(msg.equityUsdt);
       } else if (msg.type === 'TICK_HEARTBEAT') {
         if (msg.openTrades) setTrades(msg.openTrades);
+      } else if (msg.type === 'TRADE_CREATED' || msg.type === 'POSITION_UPDATED' || msg.type === 'POSITION_CLOSED') {
+        api.fetchTrades().then((t) => { if (t.trades) setTrades(t.trades); }).catch(() => {});
       } else if (msg.type === 'DUAL_PREDICTIONS_GENERATED') {
-        if (msg.symbol === activeSymbol) {
+        if (msg.symbol === activeSymbolRef.current) {
           if (msg.longPrediction) setLongPrediction(msg.longPrediction);
           if (msg.shortPrediction) setShortPrediction(msg.shortPrediction);
         }
@@ -81,20 +92,31 @@ export default function App() {
     // 4. Initial HTTP Poll
     fetchInitialData();
 
+    // 5. Re-fetch when backend URL changes in Settings
+    const unsubscribeUrl = config.onUrlChange(() => {
+      fetchInitialData();
+    });
+
     return () => {
       unsubscribeStatus();
       unsubscribeMsg();
+      unsubscribeUrl();
       wsClient.disconnect();
     };
-  }, [activeSymbol]);
+  }, []);
 
   const fetchInitialData = async () => {
+    setRefreshingRadar(true);
     try {
       const data = await api.fetchCandidates();
-      if (data.candidates) setCandidates(data.candidates);
+      if (data.candidates) {
+        setCandidates(data.candidates);
+      }
       if (data.macro) setMacro(data.macro);
     } catch (e) {
       // Offline fallback
+    } finally {
+      setRefreshingRadar(false);
     }
 
     try {
@@ -115,9 +137,14 @@ export default function App() {
   };
 
   const runPredictionsForSymbol = async (symbol: string, mode: CorrelationMode) => {
+    const targetSym = (symbol || activeSymbolRef.current || '').toUpperCase().trim();
+    if (!targetSym) {
+      Alert.alert('Select a Coin', 'Tap a coin in the Squeeze Radar first to generate predictions.');
+      return;
+    }
     setPredictingLoading(true);
     try {
-      const res = await api.fetchDualPredictions(symbol, mode);
+      const res = await api.fetchDualPredictions(targetSym, mode);
       if (res.success) {
         setLongPrediction(res.longPrediction);
         setShortPrediction(res.shortPrediction);

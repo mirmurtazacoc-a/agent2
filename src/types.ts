@@ -233,20 +233,25 @@ export interface TradePrediction {
 export interface PaperTradeRecord {
   tradeId: string;
   symbol: string;
+  id?: string;
   direction: TradeDirection;
   regime: MarketRegime;
   correlationMode?: CorrelationMode;
   entryPrice: number;
   targetPrice: number;
   currentPrice: number;
+  currentMarkPrice?: number;
   stopLoss: number;
+  trailingStopPrice?: number;
   originalStopLoss: number;
   tp1: number;
   tp2: number;
   quantity: number;
   initialNotional: number;
   currentNotional: number;
+  notionalUsdt?: number;
   leverage: number;
+  maxSafeLeverage?: number;
   status: TradeStatus;
   flowHealth?: 'STRONG' | 'STALLING' | 'REVERSAL_WARNING';
   tp1Hit: boolean;
@@ -258,6 +263,8 @@ export interface PaperTradeRecord {
   mfeUsd: number;
   realizedPnL: number;
   unrealizedPnL: number;
+  unrealizedPnlUsdt?: number;
+  unrealizedPnlPct?: number;
   feesPaid: number;
   createdAt: Date;
   openedAt?: Date;

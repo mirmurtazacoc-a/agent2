@@ -608,7 +608,26 @@
 
     // --- WEBSOCKET CONNECTION & WATCHDOG ---
     let ws = null;
+    let wsReconnectTimer = null;
+
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     function initWebSocket() {
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+      }
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
       const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
       const wsUrl = `${protocol}${window.location.host}/ws`;
 
@@ -632,7 +651,9 @@
         ws.onclose = () => {
           state.wsConnected = false;
           updateWsStatusUI(false);
-          setTimeout(initWebSocket, 2000);
+          if (!wsReconnectTimer) {
+            wsReconnectTimer = setTimeout(initWebSocket, 2000);
+          }
         };
 
         ws.onerror = () => {
@@ -641,7 +662,9 @@
         };
       } catch (err) {
         console.warn('WS connection notice:', err);
-        setTimeout(initWebSocket, 3000);
+        if (!wsReconnectTimer) {
+          wsReconnectTimer = setTimeout(initWebSocket, 3000);
+        }
       }
     }
 
@@ -673,6 +696,9 @@
         if (msg.openTrades) {
           updateActiveTradesTable(msg.openTrades);
         }
+      } else if (msg.type === 'TRADE_CREATED' || msg.type === 'POSITION_UPDATED' || msg.type === 'POSITION_CLOSED') {
+        fetchTrades();
+        fetchPortfolio();
       } else if (msg.type === 'DUAL_PREDICTIONS_GENERATED') {
         if (msg.symbol === state.activeSymbol) {
           if (msg.longPrediction) renderLongCard(msg.longPrediction);
@@ -998,6 +1024,20 @@
         margin.textContent = `$${mVal} USDT @ ${lVal}x`;
       }
 
+      const holdEl = document.getElementById('longHoldWindow');
+      if (holdEl) holdEl.textContent = 'MAX HOLD: 240 MIN (4H)';
+
+      const wallBox = document.getElementById('longWallNoteBox');
+      const wallText = document.getElementById('longWallNoteText');
+      if (wallBox && wallText) {
+        if (p.wallFrontRunNote) {
+          wallText.textContent = p.wallFrontRunNote;
+          wallBox.classList.remove('hidden');
+        } else {
+          wallBox.classList.add('hidden');
+        }
+      }
+
       if (p.predictionSummary) {
         const f = document.getElementById('longForecastText');
         if (f) f.textContent = p.predictionSummary.priceActionForecast || '';
@@ -1114,6 +1154,20 @@
         margin.textContent = `$${mVal} USDT @ ${lVal}x`;
       }
 
+      const holdEl = document.getElementById('shortHoldWindow');
+      if (holdEl) holdEl.textContent = 'MAX HOLD: 240 MIN (4H)';
+
+      const wallBox = document.getElementById('shortWallNoteBox');
+      const wallText = document.getElementById('shortWallNoteText');
+      if (wallBox && wallText) {
+        if (p.wallFrontRunNote) {
+          wallText.textContent = p.wallFrontRunNote;
+          wallBox.classList.remove('hidden');
+        } else {
+          wallBox.classList.add('hidden');
+        }
+      }
+
       if (p.predictionSummary) {
         const f = document.getElementById('shortForecastText');
         if (f) f.textContent = p.predictionSummary.priceActionForecast || '';
@@ -1213,34 +1267,39 @@
 
       tbody.innerHTML = trades.map(t => {
         const isLong = t.direction === 'LONG';
-        const pnlPct = Number(t.unrealizedPnlPct || 0);
-        const pnlUsdt = Number(t.unrealizedPnlUsdt || 0);
+        const entryPrice = Number(t.entryPrice || 0);
+        const currentMark = Number(t.currentMarkPrice ?? t.currentPrice ?? entryPrice);
+        const stopPrice = Number(t.trailingStopPrice ?? t.stopLoss ?? 0);
+        const rawDiff = isLong ? currentMark - entryPrice : entryPrice - currentMark;
+        const computedPct = entryPrice > 0 ? (rawDiff / entryPrice) * 100 : 0;
+        const pnlPct = Number(t.unrealizedPnlPct ?? computedPct);
+        const pnlUsdt = Number(t.unrealizedPnlUsdt ?? t.unrealizedPnL ?? 0);
         const pnlColor = pnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400';
         const sign = pnlPct >= 0 ? '+' : '';
 
         return `
           <tr class="border-b border-brand-border/40 hover:bg-slate-900/40 font-mono text-xs">
-            <td class="py-2 px-2 font-bold text-white">${t.symbol}</td>
+            <td class="py-2 px-2 font-bold text-white">${escapeHtml(t.symbol)}</td>
             <td class="py-2 px-2">
               <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${isLong ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-rose-950 text-rose-400 border border-rose-500/40'}">
-                ${t.direction}
+                ${escapeHtml(t.direction)}
               </span>
             </td>
-            <td class="py-2 px-2 text-slate-300">$${formatCryptoPrice(t.entryPrice)}</td>
-            <td class="py-2 px-2 text-white font-bold">$${formatCryptoPrice(t.currentMarkPrice || t.entryPrice)}</td>
-            <td class="py-2 px-2 text-rose-400">$${formatCryptoPrice(t.trailingStopPrice || t.stopLoss)}</td>
+            <td class="py-2 px-2 text-slate-300">$${formatCryptoPrice(entryPrice)}</td>
+            <td class="py-2 px-2 text-white font-bold">$${formatCryptoPrice(currentMark)}</td>
+            <td class="py-2 px-2 text-rose-400">$${formatCryptoPrice(stopPrice)}</td>
             <td class="py-2 px-2 text-emerald-400">$${formatCryptoPrice(t.tp1)} / $${formatCryptoPrice(t.tp2)}</td>
             <td class="py-2 px-2 ${pnlColor} font-bold">${sign}${pnlPct.toFixed(2)}% (${sign}$${pnlUsdt.toFixed(2)})</td>
             <td class="py-2 px-2">
               <span class="px-1.5 py-0.2 rounded text-[9px] font-bold bg-blue-950 text-blue-300 border border-blue-500/40">
-                ${t.status}
+                ${escapeHtml(t.status)}
               </span>
             </td>
             <td class="py-2 px-2 text-right space-x-1">
-              <button onclick="moveStopBreakeven('${t.symbol}')" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-600/40 cursor-pointer">
+              <button onclick="moveStopBreakeven('${escapeHtml(t.symbol)}')" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-600/40 cursor-pointer">
                 SL &rarr; BE
               </button>
-              <button onclick="panicClose('${t.symbol}')" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-600/40 cursor-pointer">
+              <button onclick="panicClose('${escapeHtml(t.symbol)}')" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-600/40 cursor-pointer">
                 Close
               </button>
             </td>

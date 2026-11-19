@@ -26,7 +26,7 @@ export interface TradePrediction {
   tp1DistancePct: number;
   tp2: number;
   tp2DistancePct: number;
-  riskRewardRatio: string;
+  riskRewardRatio: number | string;
   confidenceScore: number;
   winProbabilityPct: number;
   recommendedNotionalUsdt: number;
@@ -50,19 +50,24 @@ export interface TradePrediction {
 
 export interface PaperTrade {
   id?: string;
+  tradeId?: string;
   symbol: string;
   direction: 'LONG' | 'SHORT';
   entryPrice: number;
-  currentMarkPrice: number;
+  currentMarkPrice?: number;
+  currentPrice?: number;
   stopLoss: number;
   trailingStopPrice?: number;
   tp1: number;
   tp2: number;
-  notionalUsdt: number;
-  maxSafeLeverage: number;
+  notionalUsdt?: number;
+  currentNotional?: number;
+  maxSafeLeverage?: number;
+  leverage?: number;
   unrealizedPnlPct?: number;
   unrealizedPnlUsdt?: number;
-  status: 'ACTIVE' | 'PENDING_FILL' | 'CLOSED_TP1' | 'CLOSED_TP2' | 'CLOSED_SL' | 'CLOSED_BE';
+  unrealizedPnL?: number;
+  status: 'ACTIVE' | 'PENDING_FILL' | 'CLOSED_WIN' | 'CLOSED_LOSS' | 'CLOSED_SCRATCH' | 'EXPIRED' | string;
   entryTime?: number;
 }
 
@@ -76,8 +81,10 @@ export interface MacroTelemetry {
 export interface PortfolioReport {
   equityUsdt: number;
   availableBalanceUsdt: number;
-  unrealizedPnlUsdt: number;
-  marginUsagePct: number;
+  unrealizedPnlUsdt?: number;
+  totalUnrealizedPnL?: number;
+  usedMarginUsdt?: number;
+  marginUsagePct?: number;
 }
 
 // --- DYNAMIC HIGH-PRECISION CRYPTO PRICE FORMATTERS ---

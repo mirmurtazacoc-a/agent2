@@ -547,7 +547,7 @@
 
           <div id="dualSetupsContainer" class="space-y-3">
             <div class="text-center text-slate-500 font-mono text-xs py-3">
-              Waiting for 3-minute Dual-Horizon scanner (or click "Scan Active Coin")...
+              Click any coin in the Squeeze Radar to generate its Dual-Horizon Scalp + Swing setup.
             </div>
           </div>
         </div>
@@ -643,7 +643,26 @@
 
     // --- WEBSOCKET CONNECTION & WATCHDOG ---
     let ws = null;
+    let wsReconnectTimer = null;
+
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     function initWebSocket() {
+      if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+      }
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
       const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
       const wsUrl = `${protocol}${window.location.host}/ws`;
 
@@ -667,7 +686,9 @@
         ws.onclose = () => {
           state.wsConnected = false;
           updateWsStatusUI(false);
-          setTimeout(initWebSocket, 2000);
+          if (!wsReconnectTimer) {
+            wsReconnectTimer = setTimeout(initWebSocket, 2000);
+          }
         };
 
         ws.onerror = () => {
@@ -676,7 +697,9 @@
         };
       } catch (err) {
         console.warn('WS connection notice:', err);
-        setTimeout(initWebSocket, 3000);
+        if (!wsReconnectTimer) {
+          wsReconnectTimer = setTimeout(initWebSocket, 3000);
+        }
       }
     }
 
@@ -701,16 +724,24 @@
         if (msg.candidates) renderCandidates(msg.candidates);
         if (msg.portfolio) updatePortfolioUI(msg.portfolio);
         if (msg.fundingTimestamp) state.nextFundingTime = msg.fundingTimestamp;
-        if (msg.dualSetups) renderDualHorizonSetups(msg.dualSetups);
+        if (msg.dualSetups && msg.dualSetups.length > 0 && state.activeSymbol) {
+          renderDualHorizonSetups(msg.dualSetups.filter(s => s.symbol === state.activeSymbol));
+        }
       } else if (msg.type === 'SCANNER_UPDATE') {
         if (msg.macro) updateMacroUI(msg.macro);
         if (msg.candidates) renderCandidates(msg.candidates);
       } else if (msg.type === 'DUAL_HORIZON_SETUPS') {
-        if (msg.setups) renderDualHorizonSetups(msg.setups);
+        if (msg.setups && state.activeSymbol) {
+          const matching = msg.setups.filter(s => s.symbol === state.activeSymbol);
+          if (matching.length > 0) renderDualHorizonSetups(matching);
+        }
       } else if (msg.type === 'TICK_HEARTBEAT') {
         if (msg.openTrades) {
           updateActiveTradesTable(msg.openTrades);
         }
+      } else if (msg.type === 'TRADE_CREATED' || msg.type === 'POSITION_UPDATED' || msg.type === 'POSITION_CLOSED') {
+        fetchTrades();
+        fetchPortfolio();
       } else if (msg.type === 'DUAL_PREDICTIONS_GENERATED') {
         if (msg.symbol === state.activeSymbol) {
           if (msg.longPrediction) renderLongCard(msg.longPrediction);
@@ -1251,34 +1282,39 @@
 
       tbody.innerHTML = trades.map(t => {
         const isLong = t.direction === 'LONG';
-        const pnlPct = Number(t.unrealizedPnlPct || 0);
-        const pnlUsdt = Number(t.unrealizedPnlUsdt || 0);
+        const entryPrice = Number(t.entryPrice || 0);
+        const currentMark = Number(t.currentMarkPrice ?? t.currentPrice ?? entryPrice);
+        const stopPrice = Number(t.trailingStopPrice ?? t.stopLoss ?? 0);
+        const rawDiff = isLong ? currentMark - entryPrice : entryPrice - currentMark;
+        const computedPct = entryPrice > 0 ? (rawDiff / entryPrice) * 100 : 0;
+        const pnlPct = Number(t.unrealizedPnlPct ?? computedPct);
+        const pnlUsdt = Number(t.unrealizedPnlUsdt ?? t.unrealizedPnL ?? 0);
         const pnlColor = pnlPct >= 0 ? 'text-emerald-400' : 'text-rose-400';
         const sign = pnlPct >= 0 ? '+' : '';
 
         return `
           <tr class="border-b border-brand-border/40 hover:bg-slate-900/40 font-mono text-xs">
-            <td class="py-2 px-2 font-bold text-white">${t.symbol}</td>
+            <td class="py-2 px-2 font-bold text-white">${escapeHtml(t.symbol)}</td>
             <td class="py-2 px-2">
               <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${isLong ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/40' : 'bg-rose-950 text-rose-400 border border-rose-500/40'}">
-                ${t.direction}
+                ${escapeHtml(t.direction)}
               </span>
             </td>
-            <td class="py-2 px-2 text-slate-300">$${formatCryptoPrice(t.entryPrice)}</td>
-            <td class="py-2 px-2 text-white font-bold">$${formatCryptoPrice(t.currentMarkPrice || t.entryPrice)}</td>
-            <td class="py-2 px-2 text-rose-400">$${formatCryptoPrice(t.trailingStopPrice || t.stopLoss)}</td>
+            <td class="py-2 px-2 text-slate-300">$${formatCryptoPrice(entryPrice)}</td>
+            <td class="py-2 px-2 text-white font-bold">$${formatCryptoPrice(currentMark)}</td>
+            <td class="py-2 px-2 text-rose-400">$${formatCryptoPrice(stopPrice)}</td>
             <td class="py-2 px-2 text-emerald-400">$${formatCryptoPrice(t.tp1)} / $${formatCryptoPrice(t.tp2)}</td>
             <td class="py-2 px-2 ${pnlColor} font-bold">${sign}${pnlPct.toFixed(2)}% (${sign}$${pnlUsdt.toFixed(2)})</td>
             <td class="py-2 px-2">
               <span class="px-1.5 py-0.2 rounded text-[9px] font-bold bg-blue-950 text-blue-300 border border-blue-500/40">
-                ${t.status}
+                ${escapeHtml(t.status)}
               </span>
             </td>
             <td class="py-2 px-2 text-right space-x-1">
-              <button onclick="moveStopBreakeven('${t.symbol}')" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-600/40 cursor-pointer">
+              <button onclick="moveStopBreakeven('${escapeHtml(t.symbol)}')" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-600/40 cursor-pointer">
                 SL &rarr; BE
               </button>
-              <button onclick="panicClose('${t.symbol}')" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-600/40 cursor-pointer">
+              <button onclick="panicClose('${escapeHtml(t.symbol)}')" class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-600/40 cursor-pointer">
                 Close
               </button>
             </td>
@@ -1444,22 +1480,24 @@
 
     // --- DUAL-HORIZON AI SCANNER (SCALP + SWING) ---
     async function fetchDualSetups() {
-      try {
-        const res = await fetch('/api/setups');
-        const data = await res.json();
-        if (data && Array.isArray(data.setups)) {
-          renderDualHorizonSetups(data.setups);
-        }
-      } catch (e) {
-        console.warn('Dual setups fetch notice:', e);
+      if (!state.activeSymbol) {
+        renderDualHorizonSetups([]);
+        return;
       }
+      await analyzeActiveDualHorizon();
     }
 
     async function analyzeActiveDualHorizon() {
-      const sym = state.activeSymbol || 'BTCUSDT';
+      const sym = state.activeSymbol;
       const container = document.getElementById('dualSetupsContainer');
+      if (!sym) {
+        if (container) {
+          container.innerHTML = `<div class="text-center text-slate-500 font-mono text-xs py-3">Click any coin in the Squeeze Radar first to analyze its Dual-Horizon setup.</div>`;
+        }
+        return;
+      }
       if (container) {
-        container.innerHTML = `<div class="text-center text-purple-300 font-mono text-xs py-3 animate-pulse">Running Dual-Horizon Scalp + Swing analysis for ${sym}...</div>`;
+        container.innerHTML = `<div class="text-center text-purple-300 font-mono text-xs py-3 animate-pulse">Running Dual-Horizon Scalp + Swing analysis for ${escapeHtml(sym)}...</div>`;
       }
       try {
         const res = await fetch(`/api/analyze/${encodeURIComponent(sym)}`);
@@ -1468,11 +1506,11 @@
           state.selectedDualSetup = data.setup;
           renderDualHorizonSetups([data.setup]);
         } else if (container) {
-          container.innerHTML = `<div class="text-center text-red-400 font-mono text-xs py-3">${data?.error || 'Analysis failed'}</div>`;
+          container.innerHTML = `<div class="text-center text-red-400 font-mono text-xs py-3">${escapeHtml(data?.error || 'Analysis failed')}</div>`;
         }
       } catch (e) {
         if (container) {
-          container.innerHTML = `<div class="text-center text-red-400 font-mono text-xs py-3">Failed to analyze ${sym}</div>`;
+          container.innerHTML = `<div class="text-center text-red-400 font-mono text-xs py-3">Failed to analyze ${escapeHtml(sym)}</div>`;
         }
       }
     }
@@ -1482,16 +1520,19 @@
       const countEl = document.getElementById('dualSetupsCount');
       if (!container) return;
 
+      // Strictly display at most 1 coin's trade setup on GUI (never multiple coins)
+      const singleList = Array.isArray(setups) && setups.length > 0 ? [setups[0]] : [];
+
       if (countEl) {
-        countEl.textContent = `${setups ? setups.length : 0} SETUPS`;
+        countEl.textContent = singleList.length === 1 ? `1 COIN (${singleList[0].symbol})` : `0 SETUPS`;
       }
 
-      if (!setups || setups.length === 0) {
-        container.innerHTML = `<div class="text-center text-slate-500 font-mono text-xs py-3">No Dual-Horizon setups triggered yet. Click "⚡ Scan Active Coin" or wait for the 3-minute scanner.</div>`;
+      if (singleList.length === 0) {
+        container.innerHTML = `<div class="text-center text-slate-500 font-mono text-xs py-3">Click any coin in the Squeeze Radar to generate its Dual-Horizon Scalp + Swing setup.</div>`;
         return;
       }
 
-      container.innerHTML = setups.map((s) => {
+      container.innerHTML = singleList.map((s) => {
         const chgColor = s.priceChange24hPct >= 0 ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' : 'bg-rose-500/15 text-rose-300 border-rose-500/30';
         const triggers = (s.preFilterReasons || []).join(' • ');
         const cards = [
@@ -1592,9 +1633,9 @@
               <div class="bg-brand-dark/70 border border-slate-800 rounded-lg p-2.5 space-y-1 text-[11px] font-mono">
                 <div class="flex items-center justify-between gap-2">
                   <span class="text-slate-400 text-[10px]">TARGET MAGNET:</span>
-                  <span class="text-cyan-300 font-semibold text-[10px] text-right">${target}</span>
+                  <span class="text-cyan-300 font-semibold text-[10px] text-right">${escapeHtml(target)}</span>
                 </div>
-                <div class="text-slate-300 text-[10px] leading-relaxed">${data.rationale}</div>
+                <div class="text-slate-300 text-[10px] leading-relaxed">${escapeHtml(data.rationale)}</div>
               </div>
             </div>
           `;
@@ -1605,14 +1646,14 @@
             <!-- Coin Banner -->
             <div class="flex items-center justify-between flex-wrap gap-2 text-xs font-mono">
               <div class="flex items-center gap-2 flex-wrap">
-                <button onclick="selectSymbol('${s.symbol}')" class="text-sm font-black text-cyan-300 hover:text-cyan-200 underline cursor-pointer">${s.symbol}</button>
-                <span class="text-sm font-bold text-white">$${s.price}</span>
+                <button onclick="selectSymbol('${escapeHtml(s.symbol)}')" class="text-sm font-black text-cyan-300 hover:text-cyan-200 underline cursor-pointer">${escapeHtml(s.symbol)}</button>
+                <span class="text-sm font-bold text-white">$${formatCryptoPrice(s.price)}</span>
                 <span class="px-2 py-0.5 rounded border text-[10px] font-bold ${chgColor}">24h: ${s.priceChange24hPct >= 0 ? '+' : ''}${s.priceChange24hPct}%</span>
                 <span class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 text-[10px]">Funding: ${(s.fundingRate * 100).toFixed(4)}%</span>
               </div>
-              <span class="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-purple-300 border border-slate-700 font-bold">${s.source}</span>
+              <span class="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-purple-300 border border-slate-700 font-bold">${escapeHtml(s.source)}</span>
             </div>
-            ${triggers ? `<div class="text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded px-2.5 py-1">${triggers}</div>` : ''}
+            ${triggers ? `<div class="text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded px-2.5 py-1">${escapeHtml(triggers)}</div>` : ''}
             <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
               ${cardsHtml}
             </div>
@@ -1626,7 +1667,6 @@
       initWebSocket();
       setupAutocomplete();
       fetchCandidates();
-      fetchDualSetups();
       fetchPortfolio();
       fetchTrades();
       startFundingCountdown();

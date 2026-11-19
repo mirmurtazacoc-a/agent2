@@ -187,6 +187,31 @@ export class MarketDataEngine {
         list.shift();
       }
     }
+
+    // Also record high-frequency tick for per-trade wick evaluation since timestamp
+    let ticks = this.recentTicks.get(symbol);
+    if (!ticks) {
+      ticks = [{ price, timestamp: now }];
+      this.recentTicks.set(symbol, ticks);
+    } else {
+      const lastTick = ticks[ticks.length - 1];
+      if (now - lastTick.timestamp >= 1000 || lastTick.price !== price) {
+        ticks.push({ price, timestamp: now });
+        const tickCutoff = now - 10 * 60 * 1000;
+        while (ticks.length > 1 && ticks[0].timestamp < tickCutoff) {
+          ticks.shift();
+        }
+      }
+    }
+
+    // Update 1-minute recent candle wicks
+    const existingWick = this.recentCandleWicks.get(symbol);
+    if (!existingWick || now - existingWick.timestamp >= 60000) {
+      this.recentCandleWicks.set(symbol, { high: price, low: price, timestamp: now });
+    } else {
+      if (price > existingWick.high) existingWick.high = price;
+      if (price < existingWick.low) existingWick.low = price;
+    }
   }
 
   private handleWebSocketMessage(raw: WebSocket.RawData): void {
@@ -245,6 +270,7 @@ export class MarketDataEngine {
           if (!sym || !sym.endsWith('USDT') || sym.includes('_')) continue;
           const markPrice = parseFloat(m.p || '0');
           if (markPrice <= 0) continue;
+          this.recordPriceHistoryTick(sym, markPrice, now);
           this.markPrices.set(sym, {
             symbol: sym,
             markPrice,
@@ -414,7 +440,7 @@ export class MarketDataEngine {
   }
 
   public isWsConnected(): boolean {
-    return true;
+    return Boolean(this.ws && this.ws.readyState === WebSocket.OPEN);
   }
 
   public isValidSymbol(symbol: string): boolean {
@@ -422,7 +448,7 @@ export class MarketDataEngine {
   }
 
   public getLastWsMessageTime(): number {
-    return Date.now();
+    return this.lastWsMessageTime;
   }
 
   public getLatestMarkPrice(symbol: string): MarkPriceData | undefined {
